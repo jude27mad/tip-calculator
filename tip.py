@@ -3,7 +3,10 @@ from __future__ import annotations
 import argparse
 import sys
 import re
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+import json
+import os
+from pathlib import Path
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, ROUND_FLOOR, ROUND_CEILING
 from typing import Callable, List, Optional
 from dataclasses import dataclass
 
@@ -12,6 +15,96 @@ from dataclasses import dataclass
 CENT = Decimal("0.01")
 HUNDRED = Decimal("100")
 PERCENT_STEP = Decimal("0.01")  # display percent with up to 2 decimals
+
+
+# --- Configuration ---
+@dataclass
+class AppConfig:
+    default_tip_percent: Decimal = Decimal("20")
+    quick_picks: List[Decimal] = None  # e.g., [15, 18, 20]
+
+
+def _default_config() -> AppConfig:
+    return AppConfig(
+        default_tip_percent=Decimal("20"),
+        quick_picks=[Decimal("15"), Decimal("18"), Decimal("20")],
+    )
+
+
+def _parse_env_quick_picks(text: str) -> List[Decimal]:
+    vals: List[Decimal] = []
+    for part in text.split(","):
+        part = part.strip().replace("%", "")
+        if not part:
+            continue
+        vals.append(Decimal(part).quantize(PERCENT_STEP, rounding=ROUND_HALF_UP))
+    return vals or [Decimal("15"), Decimal("18"), Decimal("20")]
+
+
+def load_config(path: Optional[str] = None) -> AppConfig:
+    """Load defaults for tip quick-picks and default tip.
+
+    Sources (in order):
+      - JSON file if provided via --config or found as 'tipconfig.json' in CWD
+        or next to this script
+      - .env file with TIP_DEFAULT_PERCENT and TIP_QUICK_PICKS
+      - Built-in defaults (20% default; quick picks 15/18/20)
+    """
+    cfg = _default_config()
+
+    # JSON source
+    json_candidates: List[Path] = []
+    if path:
+        json_candidates.append(Path(path).expanduser())
+    json_candidates.append(Path.cwd() / "tipconfig.json")
+    json_candidates.append(Path(__file__).with_name("tipconfig.json"))
+    for p in json_candidates:
+        try:
+            if p.is_file():
+                data = json.loads(p.read_text())
+                if "default_tip_percent" in data:
+                    cfg.default_tip_percent = Decimal(str(data["default_tip_percent"]))\
+                        .quantize(PERCENT_STEP, rounding=ROUND_HALF_UP)
+                if "quick_picks" in data and isinstance(data["quick_picks"], list):
+                    cfg.quick_picks = [
+                        Decimal(str(v)).quantize(PERCENT_STEP, rounding=ROUND_HALF_UP)
+                        for v in data["quick_picks"]
+                    ]
+                break
+        except Exception:
+            # Fall back silently to other sources
+            pass
+
+    # .env source
+    env_candidates: List[Path] = []
+    env_candidates.append(Path.cwd() / ".env")
+    env_candidates.append(Path(__file__).with_name(".env"))
+    for p in env_candidates:
+        try:
+            if p.is_file():
+                for line in p.read_text().splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    k = k.strip().upper()
+                    v = v.strip()
+                    if k == "TIP_DEFAULT_PERCENT":
+                        cfg.default_tip_percent = Decimal(v.replace("%", "")).quantize(
+                            PERCENT_STEP, rounding=ROUND_HALF_UP
+                        )
+                    elif k == "TIP_QUICK_PICKS":
+                        cfg.quick_picks = _parse_env_quick_picks(v)
+                break
+        except Exception:
+            pass
+
+    # Ensure quick_picks present
+    if not cfg.quick_picks:
+        cfg.quick_picks = [Decimal("15"), Decimal("18"), Decimal("20")]
+    return cfg
 
 
 def to_cents(value: Decimal) -> Decimal:
@@ -112,6 +205,9 @@ def compute_tip_split(
     tax_amount: Decimal,
     tip_percent: Decimal,
     people: int,
+    tip_on_pretax: bool = True,
+    round_mode: str = "nearest",
+    granularity: Decimal = CENT,
 )-> TipResult:
     """Compute tip (always on pre-tax subtotal) and an exact split by cents.
 
@@ -127,15 +223,54 @@ def compute_tip_split(
         raise ValueError("People must be at least 1")
 
     bill_before_tax = to_cents(total_bill - tax_amount)
-    tip = to_cents(bill_before_tax * (tip_percent / HUNDRED))
+    tip_base = bill_before_tax if tip_on_pretax else total_bill
+    tip = to_cents(tip_base * (tip_percent / HUNDRED))
     final_total = to_cents(total_bill + tip)
 
     # Split the final total into exact cents that sum to the total
+    def _round_to_step(value: Decimal, step: Decimal, mode: str) -> Decimal:
+        steps = (value / step)
+        if mode == "nearest":
+            n = steps.quantize(Decimal(0), rounding=ROUND_HALF_UP)
+        elif mode == "up":
+            n = steps.to_integral_value(rounding=ROUND_CEILING)
+        elif mode == "down":
+            n = steps.to_integral_value(rounding=ROUND_FLOOR)
+        else:
+            raise ValueError("round_mode must be one of: nearest, up, down")
+        return to_cents(n * step)
+
+    # First, compute an exact split by cents
     total_cents = int((final_total / CENT).to_integral_value(rounding=ROUND_HALF_UP))
     base = total_cents // people
     remainder = total_cents % people
     shares_cents = [base + (1 if i < remainder else 0) for i in range(people)]
     per_person = [to_cents(Decimal(c) * CENT) for c in shares_cents]
+
+    # Apply optional rounding preference for per-person amounts
+    if granularity != CENT or round_mode != "nearest":
+        if people == 1:
+            # Nothing to round for single person; keep total exact
+            per_person = [final_total]
+        else:
+            rounded: List[Decimal] = []
+            for i in range(people - 1):
+                rounded.append(_round_to_step(per_person[i], granularity, round_mode))
+            rounded_sum = to_cents(sum(rounded, Decimal("0")))
+            # If we overshot the total, reduce earlier shares by granularity until feasible
+            if rounded_sum > final_total:
+                diff = rounded_sum - final_total
+                step = granularity
+                i = 0
+                while diff > Decimal("0") and i < len(rounded):
+                    dec = min(step, diff)
+                    if rounded[i] - dec >= Decimal("0"):
+                        rounded[i] = to_cents(rounded[i] - dec)
+                        diff = to_cents(diff - dec)
+                    i += 1
+                rounded_sum = to_cents(sum(rounded, Decimal("0")))
+            last = to_cents(final_total - rounded_sum)
+            per_person = rounded + [last]
 
     # Sanity check: the split must add up exactly to the total
     if to_cents(sum(per_person, Decimal("0"))) != final_total:
@@ -168,6 +303,7 @@ def print_results(
     tax_amount: Decimal,
     original_total: Decimal,
     tip_percent: Decimal,
+    tip_base_label: str,
     tip: Decimal,
     final_total: Decimal,
     per_person: List[Decimal],
@@ -177,7 +313,7 @@ def print_results(
     lines.append(f"Subtotal (pre-tax): {fmt_money(bill_before_tax)}")
     lines.append(f"Tax: {fmt_money(tax_amount)}")
     lines.append(f"Original total (incl. tax): {fmt_money(original_total)}")
-    lines.append(f"Tip (pre-tax at {fmt_percent(tip_percent)}%): {fmt_money(tip)}")
+    lines.append(f"Tip ({tip_base_label} at {fmt_percent(tip_percent)}%): {fmt_money(tip)}")
     lines.append(f"Total with tip: {fmt_money(final_total)}")
     lines.append(
         f"Breakdown: {fmt_money(bill_before_tax)} + {fmt_money(tax_amount)} + {fmt_money(tip)} = {fmt_money(final_total)}"
@@ -213,19 +349,24 @@ def yes_no(prompt: str, *, default_yes: bool = True) -> bool:
         print("Please answer 'y' or 'n'.")
 
 
-def prompt_tip_percent() -> Decimal:
-    """Prompt for a tip percentage with common quick-picks and a sensible default."""
+def prompt_tip_percent(config: AppConfig) -> Decimal:
+    """Prompt for a tip percentage using config-driven quick-picks and default."""
+    picks = [str(p.normalize()) for p in config.quick_picks]
+    # Build a dynamic menu like: [1] 15%  [2] 18%  [3] 20%
+    menu = "  ".join(f"[{i+1}] {p}%" for i, p in enumerate(picks))
+    default_str = str(config.default_tip_percent.normalize())
     while True:
-        s = input("Tip: [1] 15%  [2] 18%  [3] 20%  [Enter=20% or custom]: ").strip().lower()
-        quick = {"": "20", "1": "15", "2": "18", "3": "20"}
-        s = quick.get(s, s)
+        s = input(f"Tip: {menu}  [Enter={default_str}% or custom]: ").strip().lower()
+        quick_map = {str(i + 1): picks[i] for i in range(len(picks))}
+        quick_map[""] = default_str
+        s = quick_map.get(s, s)
         try:
             return parse_percentage(s, min_value=Decimal("0"), max_value=Decimal("100"))
         except ValueError as e:
             print(f"Error: {e}")
 
 
-def run_interactive() -> None:
+def run_interactive(config: AppConfig, *, round_mode: str, granularity: Decimal, tip_on_pretax: bool) -> None:
     print("--- Tip Calculator ---")
     while True:
         total_bill = prompt_loop(
@@ -243,7 +384,7 @@ def run_interactive() -> None:
             else:
                 break
 
-        tip_percent = prompt_tip_percent()
+        tip_percent = prompt_tip_percent(config)
         if tip_percent > Decimal("50"):
             print("Warning: Tip percentage exceeds 50%.")
         people = prompt_loop(
@@ -256,6 +397,9 @@ def run_interactive() -> None:
             tax_amount=tax_amount,
             tip_percent=tip_percent,
             people=people,
+            tip_on_pretax=tip_on_pretax,
+            round_mode=round_mode,
+            granularity=granularity,
         )
         print(
             print_results(
@@ -263,6 +407,7 @@ def run_interactive() -> None:
                 tax_amount=tax_amount,
                 original_total=total_bill,
                 tip_percent=tip_percent,
+                tip_base_label=("pre-tax" if tip_on_pretax else "post-tax"),
                 tip=results.tip,
                 final_total=results.final_total,
                 per_person=results.per_person,
@@ -275,11 +420,15 @@ def run_interactive() -> None:
 
 # --- CLI ---
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Tip Calculator with exact split and Decimal precision. Tip is calculated on the pre-tax subtotal.")
+    parser = argparse.ArgumentParser(description="Tip Calculator with exact split and Decimal precision. Default: tip on pre-tax subtotal (use --post-tax to tip on total).")
     parser.add_argument("--total", help="Total bill amount (including tax), e.g. 123.45 or $123.45")
     parser.add_argument("--tax", default="0", help="Tax amount, e.g. 10.23. Default: 0")
-    parser.add_argument("--tip", default="20", help="Tip percentage, e.g. 20 or 20% (0-100). Default: 20")
+    parser.add_argument("--tip", default=None, help="Tip percentage, e.g. 20 or 20% (0-100). Default comes from config")
     parser.add_argument("--people", type=int, default=1, help="Number of people to split between (>=1). Default: 1")
+    parser.add_argument("--post-tax", action="store_true", help="Compute tip on total (post-tax) instead of pre-tax subtotal")
+    parser.add_argument("--round-per-person", choices=["nearest", "up", "down"], default="nearest", help="Rounding mode for per-person amounts")
+    parser.add_argument("--granularity", choices=["0.01", "0.05", "0.25"], default="0.01", help="Rounding step for per-person amounts")
+    parser.add_argument("--config", help="Path to JSON or .env with TIP_DEFAULT_PERCENT and TIP_QUICK_PICKS")
     parser.add_argument(
         "--interactive",
         action="store_true",
@@ -292,10 +441,15 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
 
+    config = load_config(args.config)
+    round_mode = args.round_per_person
+    granularity = Decimal(args.granularity)
+    tip_on_pretax = not args.post_tax
+
     # Interactive if explicitly requested or if --total is not provided
     if args.interactive or args.total is None:
         try:
-            run_interactive()
+            run_interactive(config, round_mode=round_mode, granularity=granularity, tip_on_pretax=tip_on_pretax)
             return 0
         except (KeyboardInterrupt, EOFError):
             print("\nGoodbye!")
@@ -304,7 +458,8 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
     try:
         total_bill = parse_money(args.total, min_value=Decimal("0.01"))
         tax_amount = parse_money(args.tax, min_value=Decimal("0.00"))
-        tip_percent = parse_percentage(args.tip, min_value=Decimal("0"), max_value=Decimal("100"))
+        tip_input = args.tip if args.tip is not None else str(config.default_tip_percent)
+        tip_percent = parse_percentage(tip_input, min_value=Decimal("0"), max_value=Decimal("100"))
         if tip_percent > Decimal("50"):
             print("Warning: Tip percentage exceeds 50%.", file=sys.stderr)
         if tax_amount >= total_bill:
@@ -319,6 +474,9 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
             tax_amount=tax_amount,
             tip_percent=tip_percent,
             people=people,
+            tip_on_pretax=tip_on_pretax,
+            round_mode=round_mode,
+            granularity=granularity,
         )
     except ValueError as e:
         parser.error(str(e))
@@ -330,6 +488,7 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
             tax_amount=tax_amount,
             original_total=total_bill,
             tip_percent=tip_percent,
+            tip_base_label=("pre-tax" if tip_on_pretax else "post-tax"),
             tip=results.tip,
             final_total=results.final_total,
             per_person=results.per_person,
