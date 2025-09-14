@@ -123,7 +123,15 @@ def prompt_tip_percent(config: AppConfig) -> Decimal:
             print(f"Error: {e}")
 
 
-def run_interactive(config: AppConfig, *, round_mode: str, granularity: Decimal, tip_on_pretax: bool, currency: str) -> None:
+def run_interactive(
+    config: AppConfig,
+    *,
+    round_mode: str,
+    granularity: Decimal,
+    tip_on_pretax: bool,
+    currency: str,
+    locale: Optional[str],
+) -> None:
     print("--- Tip Calculator ---")
     while True:
         total_bill: Decimal = prompt_loop(
@@ -168,6 +176,7 @@ def run_interactive(config: AppConfig, *, round_mode: str, granularity: Decimal,
                 final_total=results.final_total,
                 per_person=results.per_person,
                 currency=currency,
+                locale=locale,
             )
         )
 
@@ -192,6 +201,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true", help="Output results as JSON")
     parser.add_argument("--csv", action="store_true", help="Output results as CSV")
     parser.add_argument("--copy", action="store_true", help="Copy the output to clipboard")
+    parser.add_argument("--locale", help="Locale for formatting (e.g., en_US). Requires Babel if provided.")
+    parser.add_argument("--format", choices=["auto", "simple", "locale"], default="auto", help="Output formatting style: simple (fallback) or locale-aware (requires --locale)")
+    parser.add_argument("--strict-money", action="store_true", help="Validate canonical money format ($1,234.56); reject loose inputs")
     parser.add_argument("--interactive", action="store_true", help="Force interactive mode regardless of provided flags.")
     return parser
 
@@ -205,6 +217,11 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
     granularity = Decimal(args.granularity)
     tip_on_pretax = not args.post_tax
     currency = args.currency
+    locale = args.locale
+    fmt_mode = args.format
+    # Determine whether to use locale-aware formatting for output
+    output_locale = locale if (fmt_mode == "locale" or (fmt_mode == "auto" and locale)) else None
+    strict_money = args.strict_money
 
     weights: Optional[List[Decimal]] = None
     if args.weights:
@@ -224,6 +241,8 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
                 granularity=granularity,
                 tip_on_pretax=tip_on_pretax,
                 currency=currency,
+                locale=output_locale,
+                strict_money=strict_money,
             )
             return 0
         except (KeyboardInterrupt, EOFError):
@@ -231,8 +250,8 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
             return 0
 
     try:
-        total_bill = parse_money(args.total, min_value=Decimal("0.01"))
-        tax_amount = parse_money(args.tax, min_value=Decimal("0.00"))
+        total_bill = parse_money(args.total, min_value=Decimal("0.01"), strict=strict_money)
+        tax_amount = parse_money(args.tax, min_value=Decimal("0.00"), strict=strict_money)
         tip_input = args.tip if args.tip is not None else str(config.default_tip_percent)
         tip_percent = parse_percentage(tip_input, min_value=Decimal("0"), max_value=Decimal("100"))
         if tip_percent > Decimal("50"):
@@ -283,6 +302,7 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
             final_total=results.final_total,
             per_person=results.per_person,
             currency=currency,
+            locale=output_locale,
         )
     print(out)
     if args.copy:

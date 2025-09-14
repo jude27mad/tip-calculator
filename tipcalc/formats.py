@@ -5,6 +5,11 @@ import subprocess
 from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Optional
 
+try:  # Optional dependency for locale-aware currency formatting
+    from babel.numbers import format_currency as _babel_format_currency  # type: ignore
+except Exception:  # pragma: no cover - optional at runtime
+    _babel_format_currency = None
+
 
 # --- Money helpers & constants ---
 CENT = Decimal("0.01")
@@ -23,8 +28,27 @@ def currency_symbol(code: str) -> str:
     return {"USD": "$", "EUR": "€", "GBP": "£", "CAD": "C$"}.get(code, "$")
 
 
-def fmt_money(value: Decimal, *, symbol: str = "$") -> str:
-    return f"{symbol}{to_cents(value):.2f}"
+def fmt_money(
+    value: Decimal,
+    *,
+    symbol: str = "$",
+    currency: str = "USD",
+    locale: Optional[str] = None,
+) -> str:
+    """Format money for display.
+
+    - If Babel is installed and a ``locale`` is provided, use locale-aware
+      formatting (e.g., thousands separators, proper symbol placement).
+    - Otherwise, fall back to a simple symbol + 2-decimal format with commas.
+    """
+    amount = to_cents(value)
+    if _babel_format_currency and locale:
+        try:
+            return _babel_format_currency(amount, currency, locale=locale)
+        except Exception:
+            pass
+    # Fallback: place symbol first and use commas
+    return f"{symbol}{amount:,.2f}"
 
 
 def fmt_percent(value: Decimal) -> str:
@@ -44,22 +68,35 @@ def print_results(
     final_total: Decimal,
     per_person: List[Decimal],
     currency: str = "USD",
+    locale: Optional[str] = None,
 ) -> str:
     lines: List[str] = []
     lines.append("\n--- Results ---")
     sym = currency_symbol(currency)
-    lines.append(f"Subtotal (pre-tax): {fmt_money(bill_before_tax, symbol=sym)}")
-    lines.append(f"Tax: {fmt_money(tax_amount, symbol=sym)}")
-    lines.append(f"Original total (incl. tax): {fmt_money(original_total, symbol=sym)}")
-    lines.append(f"Tip ({tip_base_label} at {fmt_percent(tip_percent)}%): {fmt_money(tip, symbol=sym)}")
-    lines.append(f"Total with tip: {fmt_money(final_total, symbol=sym)}")
     lines.append(
-        f"Breakdown: {fmt_money(bill_before_tax, symbol=sym)} + {fmt_money(tax_amount, symbol=sym)} + {fmt_money(tip, symbol=sym)} = {fmt_money(final_total, symbol=sym)}"
+        f"Subtotal (pre-tax): {fmt_money(bill_before_tax, symbol=sym, currency=currency, locale=locale)}"
+    )
+    lines.append(f"Tax: {fmt_money(tax_amount, symbol=sym, currency=currency, locale=locale)}")
+    lines.append(
+        f"Original total (incl. tax): {fmt_money(original_total, symbol=sym, currency=currency, locale=locale)}"
+    )
+    lines.append(
+        f"Tip ({tip_base_label} at {fmt_percent(tip_percent)}%): {fmt_money(tip, symbol=sym, currency=currency, locale=locale)}"
+    )
+    lines.append(
+        f"Total with tip: {fmt_money(final_total, symbol=sym, currency=currency, locale=locale)}"
+    )
+    lines.append(
+        f"Breakdown: {fmt_money(bill_before_tax, symbol=sym, currency=currency, locale=locale)} + {fmt_money(tax_amount, symbol=sym, currency=currency, locale=locale)} + {fmt_money(tip, symbol=sym, currency=currency, locale=locale)} = {fmt_money(final_total, symbol=sym, currency=currency, locale=locale)}"
     )
     if len(per_person) == 1:
-        lines.append(f"Each person pays: {fmt_money(per_person[0], symbol=sym)}")
+        lines.append(
+            f"Each person pays: {fmt_money(per_person[0], symbol=sym, currency=currency, locale=locale)}"
+        )
     else:
-        shares = ", ".join(fmt_money(p, symbol=sym) for p in per_person)
+        shares = ", ".join(
+            fmt_money(p, symbol=sym, currency=currency, locale=locale) for p in per_person
+        )
         lines.append(f"Each person pays: {shares}")
     return "\n".join(lines) + "\n"
 
@@ -153,4 +190,3 @@ def copy_to_clipboard(text: str) -> bool:
     except Exception:
         pass
     return False
-
