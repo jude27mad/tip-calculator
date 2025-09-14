@@ -66,9 +66,8 @@ def compute_tip_split(
     tax_amount: Decimal,
     tip_percent: Decimal,
     people: int,
-    tip_on_pretax: bool = True,
 ):
-    """Compute tip and an exact split by cents.
+    """Compute tip (always on pre-tax subtotal) and an exact split by cents.
 
     Returns a dict with keys: bill_before_tax, tip, final_total, per_person (List[Decimal]).
     """
@@ -82,8 +81,7 @@ def compute_tip_split(
         raise ValueError("People must be at least 1")
 
     bill_before_tax = to_cents(total_bill - tax_amount)
-    tip_base = bill_before_tax if tip_on_pretax else total_bill
-    tip = to_cents(tip_base * (tip_percent / HUNDRED))
+    tip = to_cents(bill_before_tax * (tip_percent / HUNDRED))
     final_total = to_cents(total_bill + tip)
 
     # Split the final total into exact cents that sum to the total
@@ -113,14 +111,22 @@ def fmt_money(value: Decimal) -> str:
 def print_results(
     *,
     bill_before_tax: Decimal,
+    tax_amount: Decimal,
+    original_total: Decimal,
+    tip_percent: Decimal,
     tip: Decimal,
     final_total: Decimal,
     per_person: List[Decimal],
 ):
     print("\n--- Results ---")
-    print(f"Bill before tax: {fmt_money(bill_before_tax)}")
-    print(f"Tip: {fmt_money(tip)}")
+    print(f"Subtotal (pre-tax): {fmt_money(bill_before_tax)}")
+    print(f"Tax: {fmt_money(tax_amount)}")
+    print(f"Original total (incl. tax): {fmt_money(original_total)}")
+    print(f"Tip (pre-tax at {to_cents(tip_percent)}%): {fmt_money(tip)}")
     print(f"Total with tip: {fmt_money(final_total)}")
+    print(
+        f"Breakdown: {fmt_money(bill_before_tax)} + {fmt_money(tax_amount)} + {fmt_money(tip)} = {fmt_money(final_total)}"
+    )
     if len(per_person) == 1:
         print(f"Each person pays: {fmt_money(per_person[0])}\n")
     else:
@@ -151,17 +157,29 @@ def yes_no(prompt: str, *, default_yes: bool = True) -> bool:
         print("Please answer 'y' or 'n'.")
 
 
+def prompt_tip_percent() -> Decimal:
+    """Prompt for a tip percentage with common quick-picks and a sensible default."""
+    while True:
+        s = input("Tip: [1] 15%  [2] 18%  [3] 20%  [Enter=18% or custom]: ").strip().lower()
+        quick = {"": "18", "1": "15", "2": "18", "3": "20"}
+        s = quick.get(s, s)
+        try:
+            return parse_percentage(s, min_value=Decimal("0"), max_value=Decimal("100"))
+        except ValueError as e:
+            print(f"Error: {e}")
+
+
 def run_interactive() -> None:
     print("--- Tip Calculator ---")
     while True:
         total_bill = prompt_loop(
-            "What is the total bill? $",
+            "Total bill (including tax): $",
             lambda s: parse_money(s, min_value=Decimal("0.01")),
         )
         # Tax must be >= 0 and < total
         while True:
             tax_amount = prompt_loop(
-                "How much was the tax? $",
+                "Sales tax amount (enter 0 if none): $",
                 lambda s: parse_money(s, min_value=Decimal("0.00")),
             )
             if tax_amount >= total_bill:
@@ -169,25 +187,27 @@ def run_interactive() -> None:
             else:
                 break
 
-        tip_percent = prompt_loop(
-            "What percentage would you like to tip? % ",
-            lambda s: parse_percentage(s, min_value=Decimal("0"), max_value=Decimal("100")),
-        )
+        tip_percent = prompt_tip_percent()
         people = prompt_loop(
-            "Split between how many people? ",
-            lambda s: parse_int(s, min_value=1),
+            "Split between how many people? [1]: ",
+            lambda s: 1 if not s.strip() else parse_int(s, min_value=1),
         )
-
-        tip_on_pretax = yes_no("Calculate tip on pre-tax amount?", default_yes=True)
 
         results = compute_tip_split(
             total_bill=total_bill,
             tax_amount=tax_amount,
             tip_percent=tip_percent,
             people=people,
-            tip_on_pretax=tip_on_pretax,
         )
-        print_results(**results)
+        print_results(
+            bill_before_tax=results["bill_before_tax"],
+            tax_amount=tax_amount,
+            original_total=total_bill,
+            tip_percent=tip_percent,
+            tip=results["tip"],
+            final_total=results["final_total"],
+            per_person=results["per_person"],
+        )
 
         if not yes_no("Calculate another tip?", default_yes=False):
             break
@@ -195,17 +215,11 @@ def run_interactive() -> None:
 
 # --- CLI ---
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Tip Calculator with exact split and Decimal precision.")
-    parser.add_argument("--total", help="Total bill amount, e.g. 123.45 or $123.45")
-    parser.add_argument("--tax", help="Tax amount, e.g. 10.23")
-    parser.add_argument("--tip", help="Tip percentage, e.g. 18 or 18% (0-100)")
-    parser.add_argument("--people", type=int, help="Number of people to split between (>=1)")
-    parser.add_argument(
-        "--tip-base",
-        choices=["pre-tax", "total"],
-        default="pre-tax",
-        help="Calculate tip on pre-tax (default) or on total bill.",
-    )
+    parser = argparse.ArgumentParser(description="Tip Calculator with exact split and Decimal precision. Tip is calculated on the pre-tax subtotal.")
+    parser.add_argument("--total", help="Total bill amount (including tax), e.g. 123.45 or $123.45")
+    parser.add_argument("--tax", default="0", help="Tax amount, e.g. 10.23. Default: 0")
+    parser.add_argument("--tip", default="18", help="Tip percentage, e.g. 18 or 18% (0-100). Default: 18")
+    parser.add_argument("--people", type=int, default=1, help="Number of people to split between (>=1). Default: 1")
     parser.add_argument(
         "--interactive",
         action="store_true",
@@ -218,9 +232,8 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
 
-    # If interactive requested or no args provided, run interactive mode
-    provided = {k for k, v in vars(args).items() if k in {"total", "tax", "tip", "people"} and v is not None}
-    if args.interactive or not provided:
+    # Interactive if explicitly requested or if --total is not provided
+    if args.interactive or args.total is None:
         try:
             run_interactive()
             return 0
@@ -228,29 +241,30 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
             print("\nGoodbye!")
             return 0
 
-    # If any of the required non-interactive args are missing, error
-    required = {"total", "tax", "tip", "people"}
-    if provided and provided != required:
-        parser.error("When using flags, you must provide --total, --tax, --tip, and --people together, or use --interactive.")
-
     try:
         total_bill = parse_money(args.total, min_value=Decimal("0.01"))
         tax_amount = parse_money(args.tax, min_value=Decimal("0.00"))
         tip_percent = parse_percentage(args.tip, min_value=Decimal("0"), max_value=Decimal("100"))
         people = parse_int(str(args.people), min_value=1)
-        tip_on_pretax = args.tip_base == "pre-tax"
+        results = compute_tip_split(
+            total_bill=total_bill,
+            tax_amount=tax_amount,
+            tip_percent=tip_percent,
+            people=people,
+        )
     except ValueError as e:
         parser.error(str(e))
-        return 2  # unreachable, parser.error raises SystemExit
+        return 2  # parser.error raises SystemExit
 
-    results = compute_tip_split(
-        total_bill=total_bill,
+    print_results(
+        bill_before_tax=results["bill_before_tax"],
         tax_amount=tax_amount,
+        original_total=total_bill,
         tip_percent=tip_percent,
-        people=people,
-        tip_on_pretax=tip_on_pretax,
+        tip=results["tip"],
+        final_total=results["final_total"],
+        per_person=results["per_person"],
     )
-    print_results(**results)
     return 0
 
 
