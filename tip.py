@@ -160,8 +160,8 @@ def yes_no(prompt: str, *, default_yes: bool = True) -> bool:
 def prompt_tip_percent() -> Decimal:
     """Prompt for a tip percentage with common quick-picks and a sensible default."""
     while True:
-        s = input("Tip: [1] 15%  [2] 18%  [3] 20%  [Enter=18% or custom]: ").strip().lower()
-        quick = {"": "18", "1": "15", "2": "18", "3": "20"}
+        s = input("Tip: [1] 15%  [2] 18%  [3] 20%  [Enter=20% or custom]: ").strip().lower()
+        quick = {"": "20", "1": "15", "2": "18", "3": "20"}
         s = quick.get(s, s)
         try:
             return parse_percentage(s, min_value=Decimal("0"), max_value=Decimal("100"))
@@ -218,7 +218,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Tip Calculator with exact split and Decimal precision. Tip is calculated on the pre-tax subtotal.")
     parser.add_argument("--total", help="Total bill amount (including tax), e.g. 123.45 or $123.45")
     parser.add_argument("--tax", default="0", help="Tax amount, e.g. 10.23. Default: 0")
-    parser.add_argument("--tip", default="18", help="Tip percentage, e.g. 18 or 18% (0-100). Default: 18")
+    parser.add_argument("--tip", default="20", help="Tip percentage, e.g. 20 or 20% (0-100). Default: 20")
     parser.add_argument("--people", type=int, default=1, help="Number of people to split between (>=1). Default: 1")
     parser.add_argument(
         "--interactive",
