@@ -46,7 +46,9 @@ def parse_money(
         )
         if not money_strict_re.match(s):
             raise ValueError("Enter a valid dollar amount like $1,234.56")
-    raw = s.replace(",", "").replace("$", "")
+    # In permissive mode, normalize common typos: remove all internal spaces
+    # so inputs like "$ 1,234.5" or ".5" pass. Commas and "$" are ignored.
+    raw = re.sub(r"\s+", "", s).replace(",", "").replace("$", "")
     try:
         value = Decimal(raw)
     except InvalidOperation as exc:
@@ -63,14 +65,17 @@ def parse_percentage(
     max_value: Decimal = Decimal("100"),
 ) -> Decimal:
     """Parse a percent string like "15%" into a Decimal percent (0-100)."""
-    raw = text.strip().replace("%", "").replace(",", "")
+    s = text.strip()
+    # Normalize whitespace like "15 %" -> "15%" before removing the symbol.
+    raw = re.sub(r"\s+", "", s).replace("%", "").replace(",", "")
     try:
         value = Decimal(raw)
     except InvalidOperation as exc:
         raise ValueError("Enter a valid percentage (e.g., 18 or 18%)") from exc
     if value < min_value or value > max_value:
         raise ValueError(f"Percentage must be between {min_value} and {max_value}")
-    return value
+    # Clamp to two decimal places for consistent math and display
+    return value.quantize(PERCENT_STEP, rounding=ROUND_HALF_UP)
 
 
 def parse_int(text: str, *, min_value: int = 1) -> int:
@@ -239,6 +244,8 @@ def run_interactive() -> None:
                 break
 
         tip_percent = prompt_tip_percent()
+        if tip_percent > Decimal("50"):
+            print("Warning: Tip percentage exceeds 50%.")
         people = prompt_loop(
             "Split between how many people? [1]: ",
             lambda s: 1 if not s.strip() else parse_int(s, min_value=1),
@@ -298,6 +305,14 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
         total_bill = parse_money(args.total, min_value=Decimal("0.01"))
         tax_amount = parse_money(args.tax, min_value=Decimal("0.00"))
         tip_percent = parse_percentage(args.tip, min_value=Decimal("0"), max_value=Decimal("100"))
+        if tip_percent > Decimal("50"):
+            print("Warning: Tip percentage exceeds 50%.", file=sys.stderr)
+        if tax_amount >= total_bill:
+            # compute_tip_split will error; surface a clearer pre-check message as well
+            print(
+                "Warning: Tax amount is greater than or equal to the total bill; this will be rejected.",
+                file=sys.stderr,
+            )
         people = parse_int(str(args.people), min_value=1)
         results = compute_tip_split(
             total_bill=total_bill,
