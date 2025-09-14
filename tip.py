@@ -143,21 +143,23 @@ def print_results(
     tip: Decimal,
     final_total: Decimal,
     per_person: List[Decimal],
-):
-    print("\n--- Results ---")
-    print(f"Subtotal (pre-tax): {fmt_money(bill_before_tax)}")
-    print(f"Tax: {fmt_money(tax_amount)}")
-    print(f"Original total (incl. tax): {fmt_money(original_total)}")
-    print(f"Tip (pre-tax at {fmt_percent(tip_percent)}%): {fmt_money(tip)}")
-    print(f"Total with tip: {fmt_money(final_total)}")
-    print(
+)-> str:
+    lines: List[str] = []
+    lines.append("\n--- Results ---")
+    lines.append(f"Subtotal (pre-tax): {fmt_money(bill_before_tax)}")
+    lines.append(f"Tax: {fmt_money(tax_amount)}")
+    lines.append(f"Original total (incl. tax): {fmt_money(original_total)}")
+    lines.append(f"Tip (pre-tax at {fmt_percent(tip_percent)}%): {fmt_money(tip)}")
+    lines.append(f"Total with tip: {fmt_money(final_total)}")
+    lines.append(
         f"Breakdown: {fmt_money(bill_before_tax)} + {fmt_money(tax_amount)} + {fmt_money(tip)} = {fmt_money(final_total)}"
     )
     if len(per_person) == 1:
-        print(f"Each person pays: {fmt_money(per_person[0])}\n")
+        lines.append(f"Each person pays: {fmt_money(per_person[0])}")
     else:
         shares = ", ".join(fmt_money(p) for p in per_person)
-        print(f"Each person pays: {shares}\n")
+        lines.append(f"Each person pays: {shares}")
+    return "\n".join(lines) + "\n"
 
 
 # --- Interactive prompts ---
@@ -225,14 +227,16 @@ def run_interactive() -> None:
             tip_percent=tip_percent,
             people=people,
         )
-        print_results(
-            bill_before_tax=results.bill_before_tax,
-            tax_amount=tax_amount,
-            original_total=total_bill,
-            tip_percent=tip_percent,
-            tip=results.tip,
-            final_total=results.final_total,
-            per_person=results.per_person,
+        print(
+            print_results(
+                bill_before_tax=results.bill_before_tax,
+                tax_amount=tax_amount,
+                original_total=total_bill,
+                tip_percent=tip_percent,
+                tip=results.tip,
+                final_total=results.final_total,
+                per_person=results.per_person,
+            )
         )
 
         if not yes_no("Calculate another tip?", default_yes=False):
@@ -282,14 +286,16 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
         parser.error(str(e))
         return 2  # parser.error raises SystemExit
 
-    print_results(
-        bill_before_tax=results.bill_before_tax,
-        tax_amount=tax_amount,
-        original_total=total_bill,
-        tip_percent=tip_percent,
-        tip=results.tip,
-        final_total=results.final_total,
-        per_person=results.per_person,
+    print(
+        print_results(
+            bill_before_tax=results.bill_before_tax,
+            tax_amount=tax_amount,
+            original_total=total_bill,
+            tip_percent=tip_percent,
+            tip=results.tip,
+            final_total=results.final_total,
+            per_person=results.per_person,
+        )
     )
     return 0
 
