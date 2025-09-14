@@ -4,6 +4,7 @@ import argparse
 import sys
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Callable, List, Optional
+from dataclasses import dataclass
 
 
 # --- Money helpers ---
@@ -60,16 +61,32 @@ def parse_int(text: str, *, min_value: int = 1) -> int:
 
 
 # --- Core calculation ---
+
+
+@dataclass
+class TipResult:
+    """Structured result of a tip calculation.
+
+    Attributes
+    - bill_before_tax: Pre-tax subtotal used as the tip base.
+    - tip: The computed tip amount.
+    - final_total: Total bill including tax and tip.
+    - per_person: Exact per-person amounts that sum to final_total.
+    """
+    bill_before_tax: Decimal
+    tip: Decimal
+    final_total: Decimal
+    per_person: List[Decimal]
 def compute_tip_split(
     *,
     total_bill: Decimal,
     tax_amount: Decimal,
     tip_percent: Decimal,
     people: int,
-):
+)-> TipResult:
     """Compute tip (always on pre-tax subtotal) and an exact split by cents.
 
-    Returns a dict with keys: bill_before_tax, tip, final_total, per_person (List[Decimal]).
+    Returns a TipResult with fields: bill_before_tax, tip, final_total, per_person.
     """
     if total_bill < Decimal("0.01"):
         raise ValueError("Total bill must be at least $0.01")
@@ -95,12 +112,12 @@ def compute_tip_split(
     if to_cents(sum(per_person, Decimal("0"))) != final_total:
         raise AssertionError("Split calculation error: per-person amounts do not sum to total")
 
-    return {
-        "bill_before_tax": bill_before_tax,
-        "tip": tip,
-        "final_total": final_total,
-        "per_person": per_person,
-    }
+    return TipResult(
+        bill_before_tax=bill_before_tax,
+        tip=tip,
+        final_total=final_total,
+        per_person=per_person,
+    )
 
 
 # --- Presentation ---
@@ -200,13 +217,13 @@ def run_interactive() -> None:
             people=people,
         )
         print_results(
-            bill_before_tax=results["bill_before_tax"],
+            bill_before_tax=results.bill_before_tax,
             tax_amount=tax_amount,
             original_total=total_bill,
             tip_percent=tip_percent,
-            tip=results["tip"],
-            final_total=results["final_total"],
-            per_person=results["per_person"],
+            tip=results.tip,
+            final_total=results.final_total,
+            per_person=results.per_person,
         )
 
         if not yes_no("Calculate another tip?", default_yes=False):
@@ -257,13 +274,13 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
         return 2  # parser.error raises SystemExit
 
     print_results(
-        bill_before_tax=results["bill_before_tax"],
+        bill_before_tax=results.bill_before_tax,
         tax_amount=tax_amount,
         original_total=total_bill,
         tip_percent=tip_percent,
-        tip=results["tip"],
-        final_total=results["final_total"],
-        per_person=results["per_person"],
+        tip=results.tip,
+        final_total=results.final_total,
+        per_person=results.per_person,
     )
     return 0
 
