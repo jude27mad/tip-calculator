@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Callable, List, Optional
 from dataclasses import dataclass
@@ -18,12 +19,34 @@ def to_cents(value: Decimal) -> Decimal:
     return value.quantize(CENT, rounding=ROUND_HALF_UP)
 
 
-def parse_money(text: str, *, min_value: Decimal = Decimal("0.00")) -> Decimal:
-    """Parse a currency string like "$1,234.56" into Decimal dollars.
+def parse_money(
+    text: str,
+    *,
+    min_value: Decimal = Decimal("0.00"),
+    strict: bool = False,
+) -> Decimal:
+    """Parse a US currency string into Decimal dollars.
 
-    Accepts "$", commas, and whitespace. Enforces a non-negative minimum.
+    Always returns a non-negative Decimal rounded to cents. In permissive mode
+    (default), accepts a loose format like "$1,234.56", "1234.56$", or
+    "1,234.56" by stripping "$" and commas anywhere.
+
+    If ``strict=True``, validates the canonical format before parsing:
+      - Optional leading "$" only at the start
+      - Digits without commas (e.g., 1234.56) OR properly grouped commas
+        (e.g., 1,234.56 or 12,345,678)
+      - Optional decimal point with 1–2 digits
+      - No trailing characters
     """
-    raw = text.strip().replace(",", "").replace("$", "")
+    s = text.strip()
+    if strict:
+        # ^\s*\$?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?\s*$
+        money_strict_re = re.compile(
+            r"^\s*\$?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?\s*$"
+        )
+        if not money_strict_re.match(s):
+            raise ValueError("Enter a valid dollar amount like $1,234.56")
+    raw = s.replace(",", "").replace("$", "")
     try:
         value = Decimal(raw)
     except InvalidOperation as exc:
