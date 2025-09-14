@@ -7,6 +7,8 @@ import json
 import os
 from pathlib import Path
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, ROUND_FLOOR, ROUND_CEILING
+import subprocess
+import platform
 from typing import Callable, List, Optional
 from dataclasses import dataclass
 
@@ -208,6 +210,7 @@ def compute_tip_split(
     tip_on_pretax: bool = True,
     round_mode: str = "nearest",
     granularity: Decimal = CENT,
+    weights: Optional[List[Decimal]] = None,
 )-> TipResult:
     """Compute tip (always on pre-tax subtotal) and an exact split by cents.
 
@@ -242,9 +245,26 @@ def compute_tip_split(
 
     # First, compute an exact split by cents
     total_cents = int((final_total / CENT).to_integral_value(rounding=ROUND_HALF_UP))
-    base = total_cents // people
-    remainder = total_cents % people
-    shares_cents = [base + (1 if i < remainder else 0) for i in range(people)]
+    if weights:
+        if len(weights) != people:
+            raise ValueError("Length of weights must equal number of people")
+        w = [Decimal(str(x)) for x in weights]
+        if any(x <= 0 for x in w):
+            raise ValueError("Weights must be positive numbers")
+        w_sum = sum(w, Decimal("0"))
+        raw_shares = [(Decimal(total_cents) * x) / w_sum for x in w]
+        floors = [int(s) for s in raw_shares]
+        remainder = total_cents - sum(floors)
+        # Distribute remaining cents to largest fractional parts
+        fracs = [(i, raw_shares[i] - floors[i]) for i in range(people)]
+        fracs.sort(key=lambda t: t[1], reverse=True)
+        shares_cents = floors[:]
+        for i in range(remainder):
+            shares_cents[fracs[i][0]] += 1
+    else:
+        base = total_cents // people
+        remainder = total_cents % people
+        shares_cents = [base + (1 if i < remainder else 0) for i in range(people)]
     per_person = [to_cents(Decimal(c) * CENT) for c in shares_cents]
 
     # Apply optional rounding preference for per-person amounts
@@ -285,8 +305,13 @@ def compute_tip_split(
 
 
 # --- Presentation ---
-def fmt_money(value: Decimal) -> str:
-    return f"${to_cents(value):.2f}"
+def currency_symbol(code: str) -> str:
+    code = (code or "USD").upper()
+    return {"USD": "$", "EUR": "€", "GBP": "£", "CAD": "C$"}.get(code, "$")
+
+
+def fmt_money(value: Decimal, *, symbol: str = "$") -> str:
+    return f"{symbol}{to_cents(value):.2f}"
 
 
 def fmt_percent(value: Decimal) -> str:
@@ -307,23 +332,112 @@ def print_results(
     tip: Decimal,
     final_total: Decimal,
     per_person: List[Decimal],
+    currency: str = "USD",
 )-> str:
     lines: List[str] = []
     lines.append("\n--- Results ---")
-    lines.append(f"Subtotal (pre-tax): {fmt_money(bill_before_tax)}")
-    lines.append(f"Tax: {fmt_money(tax_amount)}")
-    lines.append(f"Original total (incl. tax): {fmt_money(original_total)}")
-    lines.append(f"Tip ({tip_base_label} at {fmt_percent(tip_percent)}%): {fmt_money(tip)}")
-    lines.append(f"Total with tip: {fmt_money(final_total)}")
+    sym = currency_symbol(currency)
+    lines.append(f"Subtotal (pre-tax): {fmt_money(bill_before_tax, symbol=sym)}")
+    lines.append(f"Tax: {fmt_money(tax_amount, symbol=sym)}")
+    lines.append(f"Original total (incl. tax): {fmt_money(original_total, symbol=sym)}")
+    lines.append(f"Tip ({tip_base_label} at {fmt_percent(tip_percent)}%): {fmt_money(tip, symbol=sym)}")
+    lines.append(f"Total with tip: {fmt_money(final_total, symbol=sym)}")
     lines.append(
-        f"Breakdown: {fmt_money(bill_before_tax)} + {fmt_money(tax_amount)} + {fmt_money(tip)} = {fmt_money(final_total)}"
+        f"Breakdown: {fmt_money(bill_before_tax, symbol=sym)} + {fmt_money(tax_amount, symbol=sym)} + {fmt_money(tip, symbol=sym)} = {fmt_money(final_total, symbol=sym)}"
     )
     if len(per_person) == 1:
-        lines.append(f"Each person pays: {fmt_money(per_person[0])}")
+        lines.append(f"Each person pays: {fmt_money(per_person[0], symbol=sym)}")
     else:
-        shares = ", ".join(fmt_money(p) for p in per_person)
+        shares = ", ".join(fmt_money(p, symbol=sym) for p in per_person)
         lines.append(f"Each person pays: {shares}")
     return "\n".join(lines) + "\n"
+
+
+def decimals_to_strings(items: List[Decimal]) -> List[str]:
+    return [f"{to_cents(x):.2f}" for x in items]
+
+
+def results_to_dict(*,
+    bill_before_tax: Decimal,
+    tax_amount: Decimal,
+    original_total: Decimal,
+    tip_percent: Decimal,
+    tip_base: str,
+    tip: Decimal,
+    final_total: Decimal,
+    per_person: List[Decimal],
+    currency: str,
+    people: int,
+    weights: Optional[List[Decimal]],
+) -> dict:
+    return {
+        "currency": currency,
+        "tip_base": tip_base,
+        "bill_before_tax": f"{to_cents(bill_before_tax):.2f}",
+        "tax_amount": f"{to_cents(tax_amount):.2f}",
+        "original_total": f"{to_cents(original_total):.2f}",
+        "tip_percent": f"{tip_percent:.2f}",
+        "tip": f"{to_cents(tip):.2f}",
+        "final_total": f"{to_cents(final_total):.2f}",
+        "people": people,
+        "weights": [str(w) for w in (weights or [])],
+        "per_person": decimals_to_strings(per_person),
+    }
+
+
+def dict_to_csv_line(d: dict) -> str:
+    # A simple CSV with fixed columns; per_person joined by spaces; weights by commas
+    cols = [
+        "currency",
+        "tip_base",
+        "bill_before_tax",
+        "tax_amount",
+        "original_total",
+        "tip_percent",
+        "tip",
+        "final_total",
+        "people",
+        "weights",
+        "per_person",
+    ]
+    row = {
+        **d,
+        "weights": ",".join(d.get("weights", [])),
+        "per_person": ",".join(d.get("per_person", [])),
+    }
+    return ",".join(str(row.get(k, "")) for k in cols)
+
+
+def copy_to_clipboard(text: str) -> bool:
+    try:
+        import pyperclip  # type: ignore
+        pyperclip.copy(text)
+        return True
+    except Exception:
+        pass
+    try:
+        system = platform.system()
+        if system == "Windows":
+            p = subprocess.Popen(["clip"], stdin=subprocess.PIPE, close_fds=True)
+            p.stdin.write(text.encode("utf-16le"))
+            p.stdin.close()
+            return p.wait() == 0
+        elif system == "Darwin":
+            p = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE)
+            p.communicate(input=text.encode())
+            return p.returncode == 0
+        else:
+            for cmd in (["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]):
+                try:
+                    p = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+                    p.communicate(input=text.encode())
+                    if p.returncode == 0:
+                        return True
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return False
 
 
 # --- Interactive prompts ---
@@ -429,6 +543,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--round-per-person", choices=["nearest", "up", "down"], default="nearest", help="Rounding mode for per-person amounts")
     parser.add_argument("--granularity", choices=["0.01", "0.05", "0.25"], default="0.01", help="Rounding step for per-person amounts")
     parser.add_argument("--config", help="Path to JSON or .env with TIP_DEFAULT_PERCENT and TIP_QUICK_PICKS")
+    parser.add_argument("--weights", help="Comma-separated weights, e.g., 2,1,1 to split unevenly")
+    parser.add_argument("--currency", choices=["USD", "EUR", "GBP", "CAD"], default="USD", help="Currency for display and symbol")
+    parser.add_argument("--json", action="store_true", help="Output results as JSON")
+    parser.add_argument("--csv", action="store_true", help="Output results as CSV")
+    parser.add_argument("--copy", action="store_true", help="Copy the output to clipboard")
     parser.add_argument(
         "--interactive",
         action="store_true",
@@ -445,6 +564,18 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
     round_mode = args.round_per_person
     granularity = Decimal(args.granularity)
     tip_on_pretax = not args.post_tax
+    currency = args.currency
+
+    # Parse weights if provided
+    weights: Optional[List[Decimal]] = None
+    if args.weights:
+        try:
+            parts = [p.strip() for p in args.weights.split(",") if p.strip()]
+            weights = [Decimal(p) for p in parts]
+            if not weights:
+                raise ValueError
+        except Exception:
+            parser.error("--weights must be a comma-separated list of positive numbers")
 
     # Interactive if explicitly requested or if --total is not provided
     if args.interactive or args.total is None:
@@ -468,7 +599,7 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
                 "Warning: Tax amount is greater than or equal to the total bill; this will be rejected.",
                 file=sys.stderr,
             )
-        people = parse_int(str(args.people), min_value=1)
+        people = len(weights) if weights is not None else parse_int(str(args.people), min_value=1)
         results = compute_tip_split(
             total_bill=total_bill,
             tax_amount=tax_amount,
@@ -477,13 +608,34 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
             tip_on_pretax=tip_on_pretax,
             round_mode=round_mode,
             granularity=granularity,
+            weights=weights,
         )
     except ValueError as e:
         parser.error(str(e))
         return 2  # parser.error raises SystemExit
 
-    print(
-        print_results(
+    # Decide output format
+    d = results_to_dict(
+        bill_before_tax=results.bill_before_tax,
+        tax_amount=tax_amount,
+        original_total=total_bill,
+        tip_percent=tip_percent,
+        tip_base=("pre-tax" if tip_on_pretax else "post-tax"),
+        tip=results.tip,
+        final_total=results.final_total,
+        per_person=results.per_person,
+        currency=currency,
+        people=people,
+        weights=weights,
+    )
+    if args.json:
+        out = json.dumps(d)
+    elif args.csv:
+        # Print header + row for convenience
+        header = "currency,tip_base,bill_before_tax,tax_amount,original_total,tip_percent,tip,final_total,people,weights,per_person"
+        out = header + "\n" + dict_to_csv_line(d)
+    else:
+        out = print_results(
             bill_before_tax=results.bill_before_tax,
             tax_amount=tax_amount,
             original_total=total_bill,
@@ -492,8 +644,12 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
             tip=results.tip,
             final_total=results.final_total,
             per_person=results.per_person,
+            currency=currency,
         )
-    )
+    print(out)
+    if args.copy:
+        if not copy_to_clipboard(out):
+            print("(Could not copy to clipboard on this system)", file=sys.stderr)
     return 0
 
 
