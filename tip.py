@@ -10,6 +10,7 @@ from dataclasses import dataclass
 # --- Money helpers ---
 CENT = Decimal("0.01")
 HUNDRED = Decimal("100")
+PERCENT_STEP = Decimal("0.01")  # display percent with up to 2 decimals
 
 
 def to_cents(value: Decimal) -> Decimal:
@@ -125,6 +126,14 @@ def fmt_money(value: Decimal) -> str:
     return f"${to_cents(value):.2f}"
 
 
+def fmt_percent(value: Decimal) -> str:
+    """Format a percentage with up to two decimal places, trimming trailing zeros.
+
+    Examples: 18 -> "18", 18.5 -> "18.5", 18.00 -> "18"
+    """
+    q = value.quantize(PERCENT_STEP, rounding=ROUND_HALF_UP)
+    return f"{q:.2f}".rstrip("0").rstrip(".")
+
 def print_results(
     *,
     bill_before_tax: Decimal,
@@ -139,7 +148,7 @@ def print_results(
     print(f"Subtotal (pre-tax): {fmt_money(bill_before_tax)}")
     print(f"Tax: {fmt_money(tax_amount)}")
     print(f"Original total (incl. tax): {fmt_money(original_total)}")
-    print(f"Tip (pre-tax at {to_cents(tip_percent)}%): {fmt_money(tip)}")
+    print(f"Tip (pre-tax at {fmt_percent(tip_percent)}%): {fmt_money(tip)}")
     print(f"Total with tip: {fmt_money(final_total)}")
     print(
         f"Breakdown: {fmt_money(bill_before_tax)} + {fmt_money(tax_amount)} + {fmt_money(tip)} = {fmt_money(final_total)}"
