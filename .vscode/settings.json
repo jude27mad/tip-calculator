@@ -1,0 +1,7 @@
+{
+  "python.analysis.extraPaths": [
+    ".",
+    "./tipcalc"
+  ],
+  "python.analysis.diagnosticMode": "workspace"
+}
