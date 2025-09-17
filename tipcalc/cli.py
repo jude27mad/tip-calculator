@@ -131,17 +131,18 @@ def run_interactive(
     tip_on_pretax: bool,
     currency: str,
     locale: Optional[str],
+    strict_money: bool,
 ) -> None:
     print("--- Tip Calculator ---")
     while True:
         total_bill: Decimal = prompt_loop(
             "Total bill (including tax): $",
-            lambda s: parse_money(s, min_value=Decimal("0.01")),
+            lambda s: parse_money(s, min_value=Decimal("0.01"), strict=strict_money),
         )
         while True:
             tax_amount: Decimal = prompt_loop(
                 "Sales tax amount (enter 0 if none): $",
-                lambda s: parse_money(s, min_value=Decimal("0.00")),
+                lambda s: parse_money(s, min_value=Decimal("0.00"), strict=strict_money),
             )
             if tax_amount >= total_bill:
                 print("Error: Tax amount cannot be greater than or equal to the total bill.")

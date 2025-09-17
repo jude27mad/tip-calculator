@@ -41,6 +41,9 @@ tipcalc --help
 - `--json` / `--csv`: Output machine-readable results.
 - `--copy`: Copy the printed output to the clipboard (requires clipboard support or `pyperclip`).
 - `--config`: Path to a config file (see below).
+- `--strict-money`: Enforce canonical money format (`$1,234.56`) instead of permissive parsing.
+- `--format`: `auto|simple|locale` — if `locale` (or `auto` with `--locale` provided), uses locale-aware formatting for output; otherwise uses a simple formatter.
+- `--locale`: Locale used when `--format locale` (e.g., `en_US`). Requires Babel.
 
 ## Configurable Defaults
 Defaults for the interactive quick-picks and default tip can be set via a JSON file or `.env`.
@@ -68,6 +71,25 @@ Pass a custom path with `--config path/to/tipconfig.json`.
 Currency assumptions:
 - Calculations are performed in two decimal places (cents). This matches `USD/EUR/GBP/CAD`.
 - If you use `--locale` and have Babel installed, printed amounts use locale-aware formatting (thousands separators, symbol placement). The numeric precision remains two decimals. Currencies with non‑two‑decimal minor units (e.g., JPY) are not fully supported by the math at this time.
+
+## Examples
+
+| Use case | Command |
+|---|---|
+| Interactive pre-tax 20% | `tipcalc --interactive` |
+| One-shot, equal split | `tipcalc --total 123.45 --tax 10.23 --people 3` |
+| Weighted split (2,1,1) | `tipcalc --total 123.45 --tax 10 --weights 2,1,1` |
+| Post-tax tip | `tipcalc --total 123.45 --tax 10 --post-tax` |
+| Round per-person to quarters | `tipcalc --total 123.45 --tax 10 --people 3 --granularity 0.25` |
+| Locale display (en_US) | `tipcalc --total 12345.67 --tax 100.25 --currency USD --format locale --locale en_US` |
+| JSON output + copy | `tipcalc --total 123.45 --tax 10 --people 2 --json --copy` |
+| Strict money parsing | `tipcalc --total "$1,234.56" --tax 100 --strict-money` |
+
+## Design Notes
+
+- Exact-sum invariant: All calculations use Decimal and rounding that guarantees `sum(per_person) == final_total`.
+- Rounding preferences: When a granularity (e.g., `0.25`) is chosen, the first `n-1` shares are rounded according to the selected mode (`nearest|up|down`), and the last share absorbs any remainder so the sum remains exact.
+- Weights: For `--weights a,b,c`, each person’s share is proportional to their weight; cents are distributed to those with the largest fractional remainders first.
 
 ## Testing
 - Run all tests: `pytest -q`
