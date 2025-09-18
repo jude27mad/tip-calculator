@@ -25,7 +25,7 @@ def to_cents(value: Decimal) -> Decimal:
 # --- Formatting ---
 def currency_symbol(code: str) -> str:
     code = (code or "USD").upper()
-    return {"USD": "$", "EUR": "€", "GBP": "£", "CAD": "C$"}.get(code, "$")
+    return {"USD": "$", "EUR": "\u20ac", "GBP": "\u00a3", "CAD": "C$"}.get(code, "$")
 
 
 def fmt_money(
