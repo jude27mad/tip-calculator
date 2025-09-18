@@ -14,8 +14,9 @@ from .formats import (
     results_to_dict,
     dict_to_csv_line,
     copy_to_clipboard,
+    to_cents,
 )
-from .parsing import parse_money, parse_percentage, parse_int
+from .parsing import parse_money, parse_percentage, parse_int, parse_tax_entry
 from .tip_core import compute_tip_split
 
 
@@ -23,6 +24,8 @@ from .tip_core import compute_tip_split
 class AppConfig:
     default_tip_percent: Decimal
     quick_picks: List[Decimal]
+    last_tax_type: Optional[str] = None
+    last_tax_value: Optional[Decimal] = None
 
 
 def _default_config() -> AppConfig:
@@ -34,6 +37,109 @@ def _format_decimal(value: Decimal) -> str:
     if "." in s:
         s = s.rstrip("0").rstrip(".")
     return s or "0"
+
+
+STATE_FILENAME = "tipstate.json"
+
+TAX_PRESETS: Dict[str, Tuple[str, Decimal]] = {
+    "us": ("percent", Decimal("8.875")),
+    "caon": ("percent", Decimal("13")),
+    "cabc": ("percent", Decimal("12")),
+    "euvat": ("percent", Decimal("20")),
+}
+
+
+def _tax_state_paths() -> List[Path]:
+    return [Path.cwd() / STATE_FILENAME, Path(__file__).with_name(STATE_FILENAME)]
+
+
+def _parse_tax_state_token(raw: str) -> Optional[Tuple[str, Decimal]]:
+    parts = raw.strip().split(":", 1)
+    if len(parts) != 2:
+        return None
+    label, value = parts[0].strip().lower(), parts[1].strip()
+    if label not in {"percent", "amount"}:
+        return None
+    try:
+        dec = Decimal(value)
+    except Exception:
+        return None
+    if dec < Decimal("0"):
+        return None
+    return label, Decimal(value)
+
+
+def _load_tax_state(cfg: AppConfig) -> None:
+    env_val = os.environ.get("TIP_LAST_TAX")
+    state: Optional[Tuple[str, Decimal]] = None
+    if env_val:
+        state = _parse_tax_state_token(env_val)
+    if not state:
+        for candidate in _tax_state_paths():
+            try:
+                if candidate.is_file():
+                    data = json.loads(candidate.read_text())
+                    label = data.get("tax_type")
+                    raw_val = data.get("tax_value")
+                    if label in {"percent", "amount"} and raw_val is not None:
+                        state = (label, Decimal(str(raw_val)))
+                        break
+            except Exception:
+                continue
+    if state:
+        cfg.last_tax_type, cfg.last_tax_value = state
+
+
+def _save_tax_state(tax_type: Optional[str], tax_value: Optional[Decimal]) -> None:
+    if tax_type not in {"percent", "amount"} or tax_value is None:
+        return
+    data = {"tax_type": tax_type, "tax_value": str(tax_value)}
+    try:
+        target = Path.cwd() / STATE_FILENAME
+        target.write_text(json.dumps(data))
+    except Exception:
+        pass
+
+
+def _format_tax_default(tax_type: Optional[str], tax_value: Optional[Decimal]) -> Optional[str]:
+    if tax_type not in {"percent", "amount"} or tax_value is None:
+        return None
+    if tax_type == "percent":
+        return f"{_format_decimal(tax_value)}%"
+    cents = to_cents(tax_value)
+    return f"${_format_decimal(cents)}"
+
+
+def _normalize_preset_key(text: str) -> str:
+    return "".join(ch for ch in text.lower() if ch.isalnum())
+
+
+def _prompt_tax_preset(default_type: Optional[str], default_value: Optional[Decimal]) -> Tuple[Optional[str], Optional[Decimal]]:
+    parts = ["[N]one"]
+    parts.append("[US] 8.875%")
+    parts.append("[CA-ON] 13%")
+    parts.append("[CA-BC] 12%")
+    parts.append("[EU-VAT] 20%")
+    if default_type in {"percent", "amount"} and default_value is not None:
+        previous_display = _format_tax_default(default_type, default_value)
+        if previous_display:
+            parts.append(f"[Last] {previous_display}")
+    prompt = "Quick presets? " + ", ".join(parts) + " (Enter to skip): "
+    while True:
+        choice = input(prompt).strip()
+        if not choice:
+            return default_type, default_value
+        key = _normalize_preset_key(choice)
+        if key in {"n", "none"}:
+            return None, None
+        if key == "last":
+            if default_type in {"percent", "amount"} and default_value is not None:
+                return default_type, default_value
+            print("No previous tax rate stored.")
+            continue
+        if key in TAX_PRESETS:
+            return TAX_PRESETS[key]
+        print("Unknown preset. Please try again.")
 
 
 def _parse_env_quick_picks(text: str) -> List[Decimal]:
@@ -89,6 +195,7 @@ def load_config(path: Optional[str] = None) -> AppConfig:
 
     if not cfg.quick_picks:
         cfg.quick_picks = [Decimal("15"), Decimal("18"), Decimal("20")]
+    _load_tax_state(cfg)
     return cfg
 
 
@@ -131,6 +238,21 @@ def prompt_tip_percent(config: AppConfig) -> Decimal:
             print(f"Error: {e}")
 
 
+def prompt_tip_base(default_pre_tax: bool) -> bool:
+    prompt = "Tip base: [1] pre-tax (default), [2] after-tax: "
+    while True:
+        ans = input(prompt).strip().lower()
+        if not ans:
+            return default_pre_tax
+        if ans in {"1", "pre", "pretax", "pre-tax"}:
+            return True
+        if ans in {"2", "post", "after", "aftertax", "after-tax"}:
+            return False
+        if ans in {"default", "d"}:
+            return default_pre_tax
+        print("Choose 1 for pre-tax or 2 for after-tax.")
+
+
 def run_interactive(
     config: AppConfig,
     *,
@@ -142,20 +264,52 @@ def run_interactive(
     strict_money: bool,
 ) -> None:
     print("--- Tip Calculator ---")
+    tip_base_default = tip_on_pretax
     while True:
         subtotal: Decimal = prompt_loop(
             "Bill subtotal (before tax): $",
             lambda s: parse_money(s, min_value=Decimal("0.01"), strict=strict_money),
         )
-        tax_amount: Decimal = prompt_loop(
-            "Sales tax amount (enter 0 if none): $",
-            lambda s: parse_money(s, min_value=Decimal("0.00"), strict=strict_money),
+
+        default_tax_type, default_tax_value = _prompt_tax_preset(
+            config.last_tax_type, config.last_tax_value
         )
+        default_display = _format_tax_default(default_tax_type, default_tax_value)
+        base_prompt = "Tax: enter % (e.g., 13) or $ amount (e.g., 13.00), or 0 for none"
+        tax_prompt = (
+            f"{base_prompt} [Enter={default_display}]: "
+            if default_display
+            else f"{base_prompt}: "
+        )
+
+        def _parse_tax(user_input: str) -> Tuple[str, Decimal]:
+            if not user_input.strip():
+                if default_tax_type in {"percent", "amount"} and default_tax_value is not None:
+                    return default_tax_type, default_tax_value
+                raise ValueError("Enter a tax amount or percentage")
+            tax_type, tax_val = parse_tax_entry(user_input, strict=strict_money)
+            return tax_type, tax_val
+
+        tax_type, tax_value = prompt_loop(tax_prompt, _parse_tax)
+        if tax_type == "percent":
+            tax_percent = tax_value
+            tax_amount = to_cents(subtotal * (tax_percent / Decimal("100")))
+        else:
+            tax_percent = None
+            tax_amount = to_cents(tax_value)
         total_bill = subtotal + tax_amount
+
+        config.last_tax_type = tax_type
+        config.last_tax_value = tax_value
+        _save_tax_state(tax_type, tax_value)
 
         tip_percent = prompt_tip_percent(config)
         if tip_percent > Decimal("50"):
             print("Warning: Tip percentage exceeds 50%.")
+
+        tip_on_pretax_choice = prompt_tip_base(tip_base_default)
+        tip_base_default = tip_on_pretax_choice
+
         people: int = prompt_loop(
             "Split between how many people? [1]: ",
             lambda s: 1 if not s.strip() else parse_int(s, min_value=1),
@@ -166,7 +320,7 @@ def run_interactive(
             tax_amount=tax_amount,
             tip_percent=tip_percent,
             people=people,
-            tip_on_pretax=tip_on_pretax,
+            tip_on_pretax=tip_on_pretax_choice,
             round_mode=round_mode,
             granularity=granularity,
         )
@@ -174,9 +328,10 @@ def run_interactive(
             print_results(
                 bill_before_tax=results.bill_before_tax,
                 tax_amount=tax_amount,
+                tax_percent=tax_percent,
                 original_total=total_bill,
                 tip_percent=tip_percent,
-                tip_base_label=("pre-tax" if tip_on_pretax else "post-tax"),
+                tip_base_label=("pre-tax" if tip_on_pretax_choice else "post-tax"),
                 tip=results.tip,
                 final_total=results.final_total,
                 per_person=results.per_person,
@@ -278,9 +433,16 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
         parser.error(str(e))
         return 2
 
+    tax_percent_display: Optional[Decimal] = None
+    if results.bill_before_tax > Decimal("0"):
+        tax_percent_display = (tax_amount / results.bill_before_tax * Decimal("100")).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+
     d = results_to_dict(
         bill_before_tax=results.bill_before_tax,
         tax_amount=tax_amount,
+        tax_percent=tax_percent_display,
         original_total=total_bill,
         tip_percent=tip_percent,
         tip_base=("pre-tax" if tip_on_pretax else "post-tax"),
@@ -294,12 +456,13 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
     if args.json:
         out = json.dumps(d)
     elif args.csv:
-        header = "currency,tip_base,bill_before_tax,tax_amount,original_total,tip_percent,tip,final_total,people,weights,per_person"
+        header = "currency,tip_base,bill_before_tax,tax_amount,tax_percent,original_total,tip_percent,tip,final_total,people,weights,per_person"
         out = header + "\n" + dict_to_csv_line(d)
     else:
         out = print_results(
             bill_before_tax=results.bill_before_tax,
             tax_amount=tax_amount,
+            tax_percent=tax_percent_display,
             original_total=total_bill,
             tip_percent=tip_percent,
             tip_base_label=("pre-tax" if tip_on_pretax else "post-tax"),

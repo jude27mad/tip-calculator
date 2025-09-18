@@ -25,7 +25,7 @@ def to_cents(value: Decimal) -> Decimal:
 # --- Formatting ---
 def currency_symbol(code: str) -> str:
     code = (code or "USD").upper()
-    return {"USD": "$", "EUR": "â‚¬", "GBP": "Â£", "CAD": "C$"}.get(code, "$")
+    return {"USD": "$", "EUR": "€", "GBP": "£", "CAD": "C$"}.get(code, "$")
 
 
 def fmt_money(
@@ -61,6 +61,7 @@ def print_results(
     *,
     bill_before_tax: Decimal,
     tax_amount: Decimal,
+    tax_percent: Optional[Decimal] = None,
     original_total: Decimal,
     tip_percent: Decimal,
     tip_base_label: str,
@@ -76,9 +77,16 @@ def print_results(
     lines.append(
         f"Subtotal (pre-tax): {fmt_money(bill_before_tax, symbol=sym, currency=currency, locale=locale)}"
     )
-    lines.append(f"Tax: {fmt_money(tax_amount, symbol=sym, currency=currency, locale=locale)}")
+    if tax_percent is not None:
+        lines.append(
+            f"Tax: {fmt_percent(tax_percent)}% of {fmt_money(bill_before_tax, symbol=sym, currency=currency, locale=locale)} -> {fmt_money(tax_amount, symbol=sym, currency=currency, locale=locale)}"
+        )
+    else:
+        lines.append(
+            f"Tax: {fmt_money(tax_amount, symbol=sym, currency=currency, locale=locale)} (entered amount)"
+        )
     lines.append(
-        f"Original total (incl. tax): {fmt_money(original_total, symbol=sym, currency=currency, locale=locale)}"
+        f"After-tax total (before tip): {fmt_money(original_total, symbol=sym, currency=currency, locale=locale)}"
     )
     lines.append(
         f"Tip ({tip_base_label} at {fmt_percent(tip_percent)}%): {fmt_money(tip, symbol=sym, currency=currency, locale=locale)}"
@@ -110,6 +118,7 @@ def results_to_dict(
     *,
     bill_before_tax: Decimal,
     tax_amount: Decimal,
+    tax_percent: Optional[Decimal] = None,
     original_total: Decimal,
     tip_percent: Decimal,
     tip_base: str,
@@ -125,6 +134,7 @@ def results_to_dict(
         "tip_base": tip_base,
         "bill_before_tax": f"{to_cents(bill_before_tax):.2f}",
         "tax_amount": f"{to_cents(tax_amount):.2f}",
+        "tax_percent": f"{tax_percent:.2f}" if tax_percent is not None else "",
         "original_total": f"{to_cents(original_total):.2f}",
         "tip_percent": f"{tip_percent:.2f}",
         "tip": f"{to_cents(tip):.2f}",
@@ -141,6 +151,7 @@ def dict_to_csv_line(d: dict) -> str:
         "tip_base",
         "bill_before_tax",
         "tax_amount",
+        "tax_percent",
         "original_total",
         "tip_percent",
         "tip",
