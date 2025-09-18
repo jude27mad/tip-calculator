@@ -9,6 +9,7 @@ from .formats import (
     fmt_percent,
     print_results,
 )
+from .tax_lookup import lookup_tax_rate, TaxLookupError, TaxLookupResult
 
 __all__ = [
     "TipResult",
@@ -23,4 +24,7 @@ __all__ = [
     "fmt_money",
     "fmt_percent",
     "print_results",
+    "lookup_tax_rate",
+    "TaxLookupError",
+    "TaxLookupResult",
 ]

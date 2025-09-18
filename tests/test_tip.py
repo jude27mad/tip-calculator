@@ -1,3 +1,5 @@
+import pytest
+from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 import random
 
@@ -144,3 +146,102 @@ def test_rounding_preferences_quarters_up_down_nearest():
             mult = (amt / step).quantize(Decimal(0), rounding=ROUND_HALF_UP)
             assert (mult * step).quantize(Decimal("0.01")) == amt
 
+
+def test_lookup_tax_rate_caches(monkeypatch, tmp_path):
+    cache_file = tmp_path / "cache.json"
+    monkeypatch.setenv("TIP_TAX_CACHE_PATH", str(cache_file))
+    calls = []
+
+    def fake_fetch(zip_code: str, country: str):
+        calls.append((zip_code, country))
+        return tipmod.TaxLookupResult(
+            zip_code=zip_code,
+            country=country,
+            tax_type="percent",
+            value=Decimal("8.875"),
+            source="unit-test",
+            fetched_at=datetime.now(timezone.utc),
+        )
+
+    first = tipmod.lookup_tax_rate("94105", fetcher=fake_fetch)
+    second = tipmod.lookup_tax_rate("94105", fetcher=fake_fetch)
+    assert first.value == second.value == Decimal("8.875")
+    assert len(calls) == 1
+    assert cache_file.is_file()
+
+
+def test_lookup_tax_rate_expired_cache(monkeypatch, tmp_path):
+    cache_file = tmp_path / "cache.json"
+    monkeypatch.setenv("TIP_TAX_CACHE_PATH", str(cache_file))
+    calls = []
+
+    def fake_fetch(zip_code: str, country: str):
+        calls.append(datetime.now(timezone.utc))
+        return tipmod.TaxLookupResult(
+            zip_code=zip_code,
+            country=country,
+            tax_type="percent",
+            value=Decimal("7.250"),
+            source="unit-test",
+            fetched_at=datetime.now(timezone.utc),
+        )
+
+    tipmod.lookup_tax_rate("30301", fetcher=fake_fetch)
+    tipmod.lookup_tax_rate("30301", fetcher=fake_fetch, ttl_hours=0)
+    assert len(calls) == 2
+
+
+def test_lookup_tax_rate_errors_surface():
+    def failing_fetch(zip_code: str, country: str):
+        raise tipmod.TaxLookupError("boom")
+
+    with pytest.raises(tipmod.TaxLookupError):
+        tipmod.lookup_tax_rate("00000", fetcher=failing_fetch)
+
+
+def test_run_cli_uses_lookup_tax(monkeypatch, capsys):
+    from tipcalc import cli
+
+    captured = {}
+    original_compute = cli.compute_tip_split
+
+    def record_compute(**kwargs):
+        captured.update(kwargs)
+        return original_compute(**kwargs)
+
+    monkeypatch.setattr(cli, "compute_tip_split", record_compute)
+
+    def fake_lookup(zip_code: str, country: str):
+        return tipmod.TaxLookupResult(
+            zip_code=zip_code,
+            country=country,
+            tax_type="percent",
+            value=Decimal("8.000"),
+            source="unit-test",
+            fetched_at=datetime.now(timezone.utc),
+        )
+
+    monkeypatch.setattr(cli, "lookup_tax_rate", fake_lookup)
+    monkeypatch.setattr(cli, "_save_tax_state", lambda *args, **kwargs: None)
+
+    config = cli.AppConfig(
+        default_tip_percent=Decimal("18"),
+        quick_picks=[Decimal("15"), Decimal("18"), Decimal("20")],
+    )
+    monkeypatch.setattr(cli, "load_config", lambda path=None: config)
+
+    exit_code = cli.run_cli([
+        "--total",
+        "108.00",
+        "--lookup-tax",
+        "94105",
+        "--tip",
+        "18",
+        "--people",
+        "2",
+    ])
+
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert captured["tax_amount"] == Decimal("8.00")
+    assert "Using 8" in out

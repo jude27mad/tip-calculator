@@ -23,6 +23,9 @@ from tipcalc import (
     fmt_money,
     fmt_percent,
     print_results,
+    lookup_tax_rate,
+    TaxLookupError,
+    TaxLookupResult,
 )
 from tipcalc.cli import run_cli
 
@@ -41,6 +44,9 @@ __all__ = [
     "fmt_money",
     "fmt_percent",
     "print_results",
+    "lookup_tax_rate",
+    "TaxLookupError",
+    "TaxLookupResult",
     "run_cli",
 ]
 

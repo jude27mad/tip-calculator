@@ -18,6 +18,7 @@ from .formats import (
 )
 from .parsing import parse_money, parse_percentage, parse_int, parse_tax_entry
 from .tip_core import compute_tip_split
+from .tax_lookup import lookup_tax_rate, TaxLookupError, TaxLookupResult
 
 
 @dataclass
@@ -37,6 +38,11 @@ def _format_decimal(value: Decimal) -> str:
     if "." in s:
         s = s.rstrip("0").rstrip(".")
     return s or "0"
+
+def _summarize_source(source: object, *, limit: int = 60) -> str:
+    text = str(source)
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
 
 
 STATE_FILENAME = "tipstate.json"
@@ -114,12 +120,16 @@ def _normalize_preset_key(text: str) -> str:
     return "".join(ch for ch in text.lower() if ch.isalnum())
 
 
-def _prompt_tax_preset(default_type: Optional[str], default_value: Optional[Decimal]) -> Tuple[Optional[str], Optional[Decimal]]:
-    parts = ["[N]one"]
-    parts.append("[US] 8.875%")
-    parts.append("[CA-ON] 13%")
-    parts.append("[CA-BC] 12%")
-    parts.append("[EU-VAT] 20%")
+def _prompt_tax_preset(
+    default_type: Optional[str],
+    default_value: Optional[Decimal],
+    *,
+    enable_lookup: bool,
+    tax_country: str,
+) -> Tuple[Optional[str], Optional[Decimal]]:
+    parts = ["[N]one", "[US] 8.875%", "[CA-ON] 13%", "[CA-BC] 12%", "[EU-VAT] 20%"]
+    if enable_lookup:
+        parts.append("[Lookup] ZIP/postal")
     if default_type in {"percent", "amount"} and default_value is not None:
         previous_display = _format_tax_default(default_type, default_value)
         if previous_display:
@@ -137,6 +147,20 @@ def _prompt_tax_preset(default_type: Optional[str], default_value: Optional[Deci
                 return default_type, default_value
             print("No previous tax rate stored.")
             continue
+        if key in {"lookup", "zip", "postal"} and enable_lookup:
+            code = input("ZIP/postal code to lookup: ").strip()
+            if not code:
+                print("Enter a ZIP/postal code.")
+                continue
+            try:
+                result = lookup_tax_rate(code, country=tax_country)
+            except TaxLookupError as exc:
+                print(f"Lookup failed: {exc}")
+                continue
+            print(
+                f"Using {_format_decimal(result.value)}% sales tax for {code.upper()} (cached via {_summarize_source(result.source)})."
+            )
+            return result.tax_type, result.value
         if key in TAX_PRESETS:
             return TAX_PRESETS[key]
         print("Unknown preset. Please try again.")
@@ -261,6 +285,7 @@ def run_interactive(
     tip_on_pretax: bool,
     currency: str,
     locale: Optional[str],
+    tax_country: str,
     strict_money: bool,
 ) -> None:
     print("--- Tip Calculator ---")
@@ -272,10 +297,13 @@ def run_interactive(
         )
 
         default_tax_type, default_tax_value = _prompt_tax_preset(
-            config.last_tax_type, config.last_tax_value
+            config.last_tax_type,
+            config.last_tax_value,
+            enable_lookup=True,
+            tax_country=tax_country,
         )
         default_display = _format_tax_default(default_tax_type, default_tax_value)
-        base_prompt = "Tax: enter % (e.g., 13) or $ amount (e.g., 13.00), or 0 for none"
+        base_prompt = "Tax: enter % (e.g., 13), $ amount (e.g., 13.00), type 'lookup 94105', or 0 for none"
         tax_prompt = (
             f"{base_prompt} [Enter={default_display}]: "
             if default_display
@@ -283,11 +311,26 @@ def run_interactive(
         )
 
         def _parse_tax(user_input: str) -> Tuple[str, Decimal]:
-            if not user_input.strip():
+            text = user_input.strip()
+            if not text:
                 if default_tax_type in {"percent", "amount"} and default_tax_value is not None:
                     return default_tax_type, default_tax_value
                 raise ValueError("Enter a tax amount or percentage")
-            tax_type, tax_val = parse_tax_entry(user_input, strict=strict_money)
+            lowered = text.lower()
+            if lowered.startswith("lookup"):
+                parts = text.split(None, 1)
+                code = parts[1] if len(parts) > 1 else input("ZIP/postal code to lookup: ").strip()
+                if not code:
+                    raise ValueError("Enter a ZIP/postal code to lookup")
+                try:
+                    result = lookup_tax_rate(code, country=tax_country)
+                except TaxLookupError as exc:
+                    raise ValueError(f"Lookup failed: {exc}")
+                print(
+                    f"Using {_format_decimal(result.value)}% sales tax for {code.upper()} (cached via {_summarize_source(result.source)})."
+                )
+                return result.tax_type, result.value
+            tax_type, tax_val = parse_tax_entry(text, strict=strict_money)
             return tax_type, tax_val
 
         tax_type, tax_value = prompt_loop(tax_prompt, _parse_tax)
@@ -350,6 +393,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--total", help="Total bill amount (including tax), e.g. 123.45 or $123.45")
     parser.add_argument("--tax", default="0", help="Tax amount, e.g. 10.23. Default: 0")
+    parser.add_argument(
+        "--lookup-tax",
+        metavar="ZIP",
+        help="Lookup sales-tax percent by ZIP/postal code (requires API key)",
+    )
+    parser.add_argument(
+        "--tax-country",
+        default="US",
+        help="ISO country code for tax lookup (default: US)",
+    )
     parser.add_argument("--tip", default=None, help="Tip percentage, e.g. 20 or 20% (0-100). Default comes from config")
     parser.add_argument("--people", type=int, default=1, help="Number of people to split between (>=1). Default: 1")
     parser.add_argument("--post-tax", action="store_true", help="Compute tip on total (post-tax) instead of pre-tax subtotal")
@@ -379,10 +432,25 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
     currency = args.currency
     locale = args.locale
     fmt_mode = args.format
-    # Determine whether to use locale-aware formatting for output
     output_locale = locale if (fmt_mode == "locale" or (fmt_mode == "auto" and locale)) else None
     strict_money = args.strict_money
+    tax_country = (args.tax_country or "US").upper()
 
+    lookup_result: Optional[TaxLookupResult] = None
+    if args.lookup_tax:
+        try:
+            lookup_result = lookup_tax_rate(args.lookup_tax, country=tax_country)
+        except TaxLookupError as exc:
+            parser.error(str(exc))
+        config.last_tax_type = "percent"
+        config.last_tax_value = lookup_result.value
+        _save_tax_state("percent", lookup_result.value)
+        print(
+            f"Using {_format_decimal(lookup_result.value)}% sales tax for {args.lookup_tax.upper()} (cached via {_summarize_source(lookup_result.source)})."
+        )
+
+    if lookup_result and not (args.interactive or args.total):
+        parser.error("--lookup-tax requires --total unless you use --interactive")
     weights: Optional[List[Decimal]] = None
     if args.weights:
         try:
@@ -402,6 +470,7 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
                 tip_on_pretax=tip_on_pretax,
                 currency=currency,
                 locale=output_locale,
+                tax_country=tax_country,
                 strict_money=strict_money,
             )
             return 0
@@ -411,7 +480,15 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
 
     try:
         total_bill = parse_money(args.total, min_value=Decimal("0.01"), strict=strict_money)
-        tax_amount = parse_money(args.tax, min_value=Decimal("0.00"), strict=strict_money)
+        if lookup_result:
+            rate_fraction = lookup_result.value / Decimal("100")
+            bill_before_tax = to_cents(total_bill / (Decimal("1") + rate_fraction))
+            tax_amount = to_cents(total_bill - bill_before_tax)
+            tax_percent_display: Optional[Decimal] = lookup_result.value.quantize(Decimal("0.01"))
+        else:
+            tax_amount = parse_money(args.tax, min_value=Decimal("0.00"), strict=strict_money)
+            tax_percent_display = None
+
         tip_input = args.tip if args.tip is not None else str(config.default_tip_percent)
         tip_percent = parse_percentage(tip_input, min_value=Decimal("0"), max_value=Decimal("100"))
         if tip_percent > Decimal("50"):
@@ -433,8 +510,7 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
         parser.error(str(e))
         return 2
 
-    tax_percent_display: Optional[Decimal] = None
-    if results.bill_before_tax > Decimal("0"):
+    if tax_percent_display is None and results.bill_before_tax > Decimal("0"):
         tax_percent_display = (tax_amount / results.bill_before_tax * Decimal("100")).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )

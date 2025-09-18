@@ -10,8 +10,10 @@ Simple, precise tip calculator in Python. Uses Decimal for money-safe math. By d
 ## Quick Start
 - Interactive: `python tip.py --interactive`
   - Quick tax presets: US 8.875%, CA-ON 13%, CA-BC 12%, EU-VAT 20% (remembers the last choice)
+  - Live lookup: type `lookup 94105` (or any ZIP/postal code) to fetch and cache the local sales tax
   - Options work in interactive too: `--post-tax`, `--round-per-person up|down|nearest`, `--granularity 0.01|0.05|0.25`, `--currency USD|EUR|GBP|CAD`
 - One-shot CLI: `python tip.py --total 123.45 --tax 10.23 --people 3`
+  - Auto tax lookup: `python tip.py --total 108.00 --lookup-tax 94105 --tip 18 --people 2` (requires lookup API credentials)
   - Use explicit tip: `--tip 18.5` (fractional OK)
   - Uneven split: `--weights 2,1,1` (people inferred from weights)
 - Machine output: `--json` or `--csv` (combine with `--copy` to clipboard)
@@ -31,6 +33,8 @@ tipcalc --help
 ## Flags
 - `--total`: Total bill amount including tax (e.g., `123.45`, `$1,234.56`).
 - `--tax`: Sales tax amount (default `0`).
+- `--lookup-tax`: Fetch sales tax percent by ZIP/postal code (hits the configured API and caches for 24h).
+- `--tax-country`: ISO country code for lookups (default `US`).
 - `--tip`: Tip percent (0–100, fractional allowed). If omitted, default comes from config (18% unless overridden).
 - `--people`: Number of people (>=1). Ignored if `--weights` is provided.
 - `--weights`: Comma-separated positive numbers for proportional split (e.g., `2,1,1`).
@@ -67,6 +71,13 @@ TIP_QUICK_PICKS=15,18,20
 
 Interactive mode remembers the last tax type/value you entered. The value is stored in `tipstate.json` in your working directory (or alongside the installed package) and offered as the default the next time you run the calculator. You can preseed it with the `TIP_LAST_TAX` environment variable, e.g. `TIP_LAST_TAX=percent:13` or `TIP_LAST_TAX=amount:5.25`. Quick presets are available for US 8.875%, CA-ON 13%, CA-BC 12%, and EU-VAT 20% for one-key selection.
 
+### Live tax lookup
+
+- Use `--lookup-tax ZIP` for batch commands or type `lookup 94105` during interactive prompts to fetch the current combined rate.
+- The default provider is https://api.api-ninjas.com/v1/salestax - export `TIP_TAX_API_KEY` (and optionally `TIP_TAX_API_BASE`) before running.
+- Lookup results are cached for 24h in `tax_cache.json`. Override with `TIP_TAX_CACHE_PATH` or disable with `TIP_TAX_CACHE_PATH=/dev/null`.
+- Set `--tax-country` when your provider supports non-US regions.
+
 Pass a custom path with `--config path/to/tipconfig.json`.
 
 ## Parsing, Currency & Rounding Notes
@@ -84,6 +95,7 @@ Currency assumptions:
 |---|---|
 | Interactive pre-tax 18% | `tipcalc --interactive` |
 | One-shot, equal split | `tipcalc --total 123.45 --tax 10.23 --people 3` |
+| Auto tax lookup (ZIP) | `tipcalc --total 108.00 --lookup-tax 94105 --tip 18 --people 2` |
 | Weighted split (2,1,1) | `tipcalc --total 123.45 --tax 10 --weights 2,1,1` |
 | Post-tax tip | `tipcalc --total 123.45 --tax 10 --post-tax` |
 | Round per-person to quarters | `tipcalc --total 123.45 --tax 10 --people 3 --granularity 0.25` |
@@ -99,3 +111,4 @@ Currency assumptions:
 
 ## Testing
 - Run all tests: `pytest -q`
+
