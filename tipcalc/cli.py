@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
-from typing import List, Optional, Callable, TypeVar
+from typing import Callable, Dict, List, Optional, Tuple, TypeVar
 
 from .formats import (
     print_results,
@@ -142,19 +143,15 @@ def run_interactive(
 ) -> None:
     print("--- Tip Calculator ---")
     while True:
-        total_bill: Decimal = prompt_loop(
-            "Total bill (including tax): $",
+        subtotal: Decimal = prompt_loop(
+            "Bill subtotal (before tax): $",
             lambda s: parse_money(s, min_value=Decimal("0.01"), strict=strict_money),
         )
-        while True:
-            tax_amount: Decimal = prompt_loop(
-                "Sales tax amount (enter 0 if none): $",
-                lambda s: parse_money(s, min_value=Decimal("0.00"), strict=strict_money),
-            )
-            if tax_amount >= total_bill:
-                print("Error: Tax amount cannot be greater than or equal to the total bill.")
-            else:
-                break
+        tax_amount: Decimal = prompt_loop(
+            "Sales tax amount (enter 0 if none): $",
+            lambda s: parse_money(s, min_value=Decimal("0.00"), strict=strict_money),
+        )
+        total_bill = subtotal + tax_amount
 
         tip_percent = prompt_tip_percent(config)
         if tip_percent > Decimal("50"):
