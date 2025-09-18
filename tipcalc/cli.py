@@ -25,7 +25,14 @@ class AppConfig:
 
 
 def _default_config() -> AppConfig:
-    return AppConfig(default_tip_percent=Decimal("20"), quick_picks=[Decimal("15"), Decimal("18"), Decimal("20")])
+    return AppConfig(default_tip_percent=Decimal("18"), quick_picks=[Decimal("15"), Decimal("18"), Decimal("20")])
+
+
+def _format_decimal(value: Decimal) -> str:
+    s = format(value, "f")
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    return s or "0"
 
 
 def _parse_env_quick_picks(text: str) -> List[Decimal]:
@@ -109,9 +116,9 @@ def yes_no(prompt: str, *, default_yes: bool = True) -> bool:
 
 
 def prompt_tip_percent(config: AppConfig) -> Decimal:
-    picks = [str(p.normalize()) for p in config.quick_picks]
+    picks = [_format_decimal(p) for p in config.quick_picks]
     menu = "  ".join(f"[{i+1}] {p}%" for i, p in enumerate(picks))
-    default_str = str(config.default_tip_percent.normalize())
+    default_str = _format_decimal(config.default_tip_percent)
     while True:
         s = input(f"Tip: {menu}  [Enter={default_str}% or custom]: ").strip().lower()
         quick_map = {str(i + 1): picks[i] for i in range(len(picks))}
