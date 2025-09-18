@@ -9,6 +9,7 @@ Simple, precise tip calculator in Python. Uses Decimal for money-safe math. By d
 
 ## Quick Start
 - Interactive: `python tip.py --interactive`
+  - Quick tax presets: US 8.875%, CA-ON 13%, CA-BC 12%, EU-VAT 20% (remembers the last choice)
   - Options work in interactive too: `--post-tax`, `--round-per-person up|down|nearest`, `--granularity 0.01|0.05|0.25`, `--currency USD|EUR|GBP|CAD`
 - One-shot CLI: `python tip.py --total 123.45 --tax 10.23 --people 3`
   - Use explicit tip: `--tip 18.5` (fractional OK)
@@ -30,7 +31,7 @@ tipcalc --help
 ## Flags
 - `--total`: Total bill amount including tax (e.g., `123.45`, `$1,234.56`).
 - `--tax`: Sales tax amount (default `0`).
-- `--tip`: Tip percent (0–100, fractional allowed). If omitted, default comes from config (20% unless overridden).
+- `--tip`: Tip percent (0–100, fractional allowed). If omitted, default comes from config (18% unless overridden).
 - `--people`: Number of people (>=1). Ignored if `--weights` is provided.
 - `--weights`: Comma-separated positive numbers for proportional split (e.g., `2,1,1`).
 - `--post-tax`: Compute tip on the total (post-tax) instead of the pre-tax subtotal.
@@ -51,16 +52,21 @@ Defaults for the interactive quick-picks and default tip can be set via a JSON f
 JSON (`tipconfig.json`):
 ```
 {
-  "default_tip_percent": 20,
+  "default_tip_percent": 18,
   "quick_picks": [15, 18, 20]
 }
 ```
 
 .env:
 ```
-TIP_DEFAULT_PERCENT=20
+TIP_DEFAULT_PERCENT=18
 TIP_QUICK_PICKS=15,18,20
 ```
+
+### Tax defaults & persistence
+
+Interactive mode remembers the last tax type/value you entered. The value is stored in `tipstate.json` in your working directory (or alongside the installed package) and offered as the default the next time you run the calculator. You can preseed it with the `TIP_LAST_TAX` environment variable, e.g. `TIP_LAST_TAX=percent:13` or `TIP_LAST_TAX=amount:5.25`. Quick presets are available for US 8.875%, CA-ON 13%, CA-BC 12%, and EU-VAT 20% for one-key selection.
+
 Pass a custom path with `--config path/to/tipconfig.json`.
 
 ## Parsing, Currency & Rounding Notes
@@ -76,7 +82,7 @@ Currency assumptions:
 
 | Use case | Command |
 |---|---|
-| Interactive pre-tax 20% | `tipcalc --interactive` |
+| Interactive pre-tax 18% | `tipcalc --interactive` |
 | One-shot, equal split | `tipcalc --total 123.45 --tax 10.23 --people 3` |
 | Weighted split (2,1,1) | `tipcalc --total 123.45 --tax 10 --weights 2,1,1` |
 | Post-tax tip | `tipcalc --total 123.45 --tax 10 --post-tax` |
