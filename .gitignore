@@ -180,3 +180,4 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 tax_cache.json
+qr_codes/

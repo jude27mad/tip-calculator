@@ -7,7 +7,7 @@ import sys
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple, TypeVar
+from typing import Callable, Dict, Iterable, List, Optional, Tuple, TypeVar
 
 from .formats import (
     print_results,
@@ -18,6 +18,7 @@ from .formats import (
 )
 from .parsing import parse_money, parse_percentage, parse_int, parse_tax_entry
 from .tip_core import compute_tip_split
+from .qr import generate_qr_codes, QRGenerationError
 from .tax_lookup import lookup_tax_rate, TaxLookupError, TaxLookupResult
 
 
@@ -116,6 +117,23 @@ def _format_tax_default(tax_type: Optional[str], tax_value: Optional[Decimal]) -
     return f"${_format_decimal(cents)}"
 
 
+
+
+def _maybe_generate_qr(per_person: Iterable[Decimal], qr_options: Optional[dict]) -> None:
+    if not qr_options:
+        return
+    try:
+        paths = generate_qr_codes(
+            per_person=per_person,
+            provider=qr_options["provider"],
+            note=qr_options["note"],
+            directory=qr_options["directory"],
+            scale=qr_options["scale"],
+        )
+    except QRGenerationError as exc:
+        print(f"QR generation failed: {exc}", file=sys.stderr)
+        return
+    print(f"Saved {len(paths)} QR code(s) to {qr_options['directory']}")
 def _normalize_preset_key(text: str) -> str:
     return "".join(ch for ch in text.lower() if ch.isalnum())
 
@@ -287,6 +305,7 @@ def run_interactive(
     locale: Optional[str],
     tax_country: str,
     strict_money: bool,
+    qr_options: Optional[dict] = None,
 ) -> None:
     print("--- Tip Calculator ---")
     tip_base_default = tip_on_pretax
@@ -382,6 +401,7 @@ def run_interactive(
                 locale=locale,
             )
         )
+        _maybe_generate_qr(results.per_person, qr_options)
 
         if not yes_no("Calculate another tip?", default_yes=False):
             break
@@ -393,6 +413,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--total", help="Total bill amount (including tax), e.g. 123.45 or $123.45")
     parser.add_argument("--tax", default="0", help="Tax amount, e.g. 10.23. Default: 0")
+    parser.add_argument("--qr", action="store_true", help="Generate per-person payment QR codes")
+    parser.add_argument("--qr-provider", choices=["venmo", "generic"], default="venmo", help="QR link provider to use")
+    parser.add_argument("--qr-dir", default="qr_codes", help="Directory to write QR code PNG files")
+    parser.add_argument("--qr-note", default="tipcalc split", help="Note text embedded in the QR payload")
+    parser.add_argument("--qr-scale", type=int, default=5, help="Pixel scale for generated QR images")
     parser.add_argument(
         "--lookup-tax",
         metavar="ZIP",
@@ -435,6 +460,14 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
     output_locale = locale if (fmt_mode == "locale" or (fmt_mode == "auto" and locale)) else None
     strict_money = args.strict_money
     tax_country = (args.tax_country or "US").upper()
+    qr_options: Optional[dict] = None
+    if args.qr:
+        qr_options = {
+            "provider": args.qr_provider,
+            "note": args.qr_note,
+            "directory": Path(args.qr_dir),
+            "scale": max(1, args.qr_scale),
+        }
 
     lookup_result: Optional[TaxLookupResult] = None
     if args.lookup_tax:
@@ -472,6 +505,7 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
                 locale=output_locale,
                 tax_country=tax_country,
                 strict_money=strict_money,
+                qr_options=qr_options,
             )
             return 0
         except (KeyboardInterrupt, EOFError):
@@ -549,6 +583,8 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
             locale=output_locale,
         )
     print(out)
+    if qr_options:
+        _maybe_generate_qr(results.per_person, qr_options)
     if args.copy:
         if not copy_to_clipboard(out):
             print("(Could not copy to clipboard on this system)", file=sys.stderr)

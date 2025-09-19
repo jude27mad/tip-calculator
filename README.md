@@ -5,6 +5,7 @@ Simple, precise tip calculator in Python. Uses Decimal for money-safe math. By d
 - Python 3.9+ recommended
 - Optional clipboard: `pip install pyperclip` to enable `--copy`
 - Optional locale/currency formatting: `pip install Babel` (or install the `i18n` extra below)
+- Optional QR codes: `pip install segno` (or install the `qr` extra below)
 - Tests: `pip install pytest`
 
 ## Quick Start
@@ -14,6 +15,7 @@ Simple, precise tip calculator in Python. Uses Decimal for money-safe math. By d
   - Options work in interactive too: `--post-tax`, `--round-per-person up|down|nearest`, `--granularity 0.01|0.05|0.25`, `--currency USD|EUR|GBP|CAD`
 - One-shot CLI: `python tip.py --total 123.45 --tax 10.23 --people 3`
   - Auto tax lookup: `python tip.py --total 108.00 --lookup-tax 94105 --tip 18 --people 2` (requires lookup API credentials)
+  - Generate QR codes: `python tip.py --total 108.00 --tip 18 --people 2 --qr --qr-note "Dinner"`
   - Use explicit tip: `--tip 18.5` (fractional OK)
   - Uneven split: `--weights 2,1,1` (people inferred from weights)
 - Machine output: `--json` or `--csv` (combine with `--copy` to clipboard)
@@ -33,6 +35,11 @@ tipcalc --help
 ## Flags
 - `--total`: Total bill amount including tax (e.g., `123.45`, `$1,234.56`).
 - `--tax`: Sales tax amount (default `0`).
+- `--qr`: Generate per-person QR code PNGs for payment links.
+- `--qr-provider`: Provider for the QR payload (`venmo` or `generic`).
+- `--qr-dir`: Directory path to store generated QR images.
+- `--qr-note`: Note text embedded in the payment link.
+- `--qr-scale`: Pixel scale for QR modules (default `5`).
 - `--lookup-tax`: Fetch sales tax percent by ZIP/postal code (hits the configured API and caches for 24h).
 - `--tax-country`: ISO country code for lookups (default `US`).
 - `--tip`: Tip percent (0–100, fractional allowed). If omitted, default comes from config (18% unless overridden).
@@ -77,6 +84,12 @@ Interactive mode remembers the last tax type/value you entered. The value is sto
 - The default provider is https://api.api-ninjas.com/v1/salestax - export `TIP_TAX_API_KEY` (and optionally `TIP_TAX_API_BASE`) before running.
 - Lookup results are cached for 24h in `tax_cache.json`. Override with `TIP_TAX_CACHE_PATH` or disable with `TIP_TAX_CACHE_PATH=/dev/null`.
 - Set `--tax-country` when your provider supports non-US regions.
+
+### QR codes
+
+- Install the optional dependency with `pip install tip-calculator[qr]` to enable image generation.
+- Run with `--qr` to emit PNGs (default directory `qr_codes/`) for each per-person share.
+- Adjust the link provider (`--qr-provider`), note (`--qr-note`), output folder (`--qr-dir`), and image scale (`--qr-scale`).
 
 Pass a custom path with `--config path/to/tipconfig.json`.
 

@@ -21,6 +21,7 @@ dependencies = []
 [project.optional-dependencies]
 clipboard = ["pyperclip>=1.8.2"]
 i18n = ["Babel>=2.12"]
+qr = ["segno>=1.6"]
 dev = ["pytest>=7.0"]
 
 [project.scripts]

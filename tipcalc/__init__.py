@@ -11,6 +11,8 @@ from .formats import (
 )
 from .tax_lookup import lookup_tax_rate, TaxLookupError, TaxLookupResult
 
+from .qr import generate_qr_codes, QRGenerationError
+
 __all__ = [
     "TipResult",
     "compute_tip_split",
@@ -27,4 +29,6 @@ __all__ = [
     "lookup_tax_rate",
     "TaxLookupError",
     "TaxLookupResult",
+    "generate_qr_codes",
+    "QRGenerationError",
 ]

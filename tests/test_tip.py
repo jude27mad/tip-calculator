@@ -1,5 +1,6 @@
 import pytest
 from datetime import datetime, timezone
+from pathlib import Path
 from decimal import Decimal, ROUND_HALF_UP
 import random
 
@@ -245,3 +246,84 @@ def test_run_cli_uses_lookup_tax(monkeypatch, capsys):
     assert exit_code == 0
     assert captured["tax_amount"] == Decimal("8.00")
     assert "Using 8" in out
+
+
+def test_generate_qr_codes_venmo(monkeypatch, tmp_path):
+    from tipcalc import qr
+
+    saved_payloads = []
+
+    class FakeQR:
+        def __init__(self, payload: str) -> None:
+            self.payload = payload
+
+        def save(self, path: str, scale: int) -> None:
+            Path(path).write_text('fake')
+
+    class FakeSegno:
+        @staticmethod
+        def make(payload: str):
+            saved_payloads.append(payload)
+            return FakeQR(payload)
+
+    monkeypatch.setattr(qr, '_load_segno', lambda: FakeSegno)
+    outputs = qr.generate_qr_codes(
+        per_person=[Decimal('12.34'), Decimal('0.66')],
+        provider='venmo',
+        note='Dinner',
+        directory=tmp_path,
+        scale=3,
+    )
+    assert len(outputs) == 2
+    assert all(p.exists() for p in outputs)
+    assert saved_payloads[0].startswith('https://venmo.com/')
+
+
+def test_generate_qr_codes_bad_provider(monkeypatch):
+    from tipcalc import qr
+
+    class DummySegno:
+        @staticmethod
+        def make(payload: str):
+            return None
+    monkeypatch.setattr(qr, '_load_segno', lambda: DummySegno)
+    with pytest.raises(qr.QRGenerationError):
+        qr.generate_qr_codes(per_person=[Decimal('1.00')], provider='unknown', note='Test', directory=Path('dummy'))
+
+
+def test_run_cli_generates_qr(monkeypatch, tmp_path, capsys):
+    from tipcalc import cli
+
+    def fake_generate_qr_codes(**kwargs):
+        out_dir = kwargs['directory']
+        out_dir.mkdir(parents=True, exist_ok=True)
+        file_path = out_dir / 'qr_person_1.png'
+        file_path.write_text('fake')
+        return [file_path]
+
+    monkeypatch.setattr(cli, 'generate_qr_codes', fake_generate_qr_codes)
+    monkeypatch.setattr(cli, '_save_tax_state', lambda *args, **kwargs: None)
+
+    config = cli.AppConfig(
+        default_tip_percent=Decimal('18'),
+        quick_picks=[Decimal('20')],
+    )
+    monkeypatch.setattr(cli, 'load_config', lambda path=None: config)
+
+    exit_code = cli.run_cli([
+        '--total',
+        '100.00',
+        '--tax',
+        '0',
+        '--tip',
+        '18',
+        '--people',
+        '1',
+        '--qr',
+        '--qr-dir',
+        str(tmp_path / 'codes'),
+    ])
+
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert 'QR code' in out or 'Saved' in out

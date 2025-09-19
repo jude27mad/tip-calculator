@@ -26,6 +26,8 @@ from tipcalc import (
     lookup_tax_rate,
     TaxLookupError,
     TaxLookupResult,
+    generate_qr_codes,
+    QRGenerationError,
 )
 from tipcalc.cli import run_cli
 
@@ -47,6 +49,8 @@ __all__ = [
     "lookup_tax_rate",
     "TaxLookupError",
     "TaxLookupResult",
+    "generate_qr_codes",
+    "QRGenerationError",
     "run_cli",
 ]
 
