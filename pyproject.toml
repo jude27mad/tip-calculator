@@ -25,6 +25,7 @@ qr = ["segno>=1.6"]
 dev = ["pytest>=7.0"]
 
 [project.scripts]
+tip = "tipcalc.cli:run_cli"
 tipcalc = "tipcalc.cli:run_cli"
 
 [tool.setuptools.packages.find]

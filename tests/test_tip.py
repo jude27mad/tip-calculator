@@ -6,6 +6,7 @@ from decimal import Decimal, ROUND_HALF_UP
 import random
 from tipcalc import profiles
 
+import importlib.metadata as importlib_metadata
 import tip as tipmod
 
 
@@ -341,6 +342,7 @@ def test_profiles_save_and_load(monkeypatch, tmp_path):
         'locale': 'en_US',
     })
     loaded = profiles.get_profile('dinner')
+    assert loaded is not None
     assert loaded['people'] == 4
     assert loaded['round_mode'] == 'nearest'
     assert loaded['granularity'] == '0.25'
@@ -384,3 +386,37 @@ def test_run_cli_with_profile(monkeypatch, tmp_path):
     assert captured['people'] == 3
     assert captured['round_mode'] == 'up'
     assert captured['granularity'] == Decimal('0.25')
+
+def test_tip_module_exports_and_version():
+    expected_exports = {
+        "__version__",
+        "TipResult",
+        "compute_tip_split",
+        "parse_money",
+        "parse_percentage",
+        "parse_int",
+        "to_cents",
+        "CENT",
+        "HUNDRED",
+        "PERCENT_STEP",
+        "fmt_money",
+        "fmt_percent",
+        "print_results",
+        "lookup_tax_rate",
+        "TaxLookupError",
+        "TaxLookupResult",
+        "generate_qr_codes",
+        "QRGenerationError",
+        "run_cli",
+    }
+    assert set(tipmod.__all__) == expected_exports
+
+    try:
+        expected_version = importlib_metadata.version("tip-calculator")
+    except importlib_metadata.PackageNotFoundError:
+        expected_version = "0+unknown"
+    else:
+        expected_version = expected_version or "0+unknown"
+
+    assert isinstance(tipmod.__version__, str)
+    assert tipmod.__version__ == expected_version
