@@ -16,6 +16,7 @@ Simple, precise tip calculator in Python. Uses Decimal for money-safe math. By d
 - One-shot CLI: `python tip.py --total 123.45 --tax 10.23 --people 3`
   - Auto tax lookup: `python tip.py --total 108.00 --lookup-tax 94105 --tip 18 --people 2` (requires lookup API credentials)
   - Generate QR codes: `python tip.py --total 108.00 --tip 18 --people 2 --qr --qr-note "Dinner"`
+  - Manage profiles: `python tip.py --profile dinner --total 80 --tip 20`
   - Use explicit tip: `--tip 18.5` (fractional OK)
   - Uneven split: `--weights 2,1,1` (people inferred from weights)
 - Machine output: `--json` or `--csv` (combine with `--copy` to clipboard)
@@ -53,6 +54,8 @@ tipcalc --help
 - `--json` / `--csv`: Output machine-readable results.
 - `--copy`: Copy the printed output to the clipboard (requires clipboard support or `pyperclip`).
 - `--config`: Path to a config file (see below).
+- `--profile`: Load saved defaults (people, rounding, locale) by name.
+- `--save-profile`: Persist the current defaults under a name for later recall.
 - `--strict-money`: Enforce canonical money format (`$1,234.56`) instead of permissive parsing.
 - `--format`: `auto|simple|locale` — if `locale` (or `auto` with `--locale` provided), uses locale-aware formatting for output; otherwise uses a simple formatter.
 - `--locale`: Locale used when `--format locale` (e.g., `en_US`). Requires Babel.
@@ -92,6 +95,12 @@ Interactive mode remembers the last tax type/value you entered. The value is sto
 - Adjust the link provider (`--qr-provider`), note (`--qr-note`), output folder (`--qr-dir`), and image scale (`--qr-scale`).
 
 Pass a custom path with `--config path/to/tipconfig.json`.
+
+### Profiles
+
+- Store your go-to setup with `--save-profile dinner --people 4 --round-per-person nearest --granularity 0.25 --locale en_US`.
+- Reuse it anytime using `--profile dinner` (you can still override individual flags).
+- Profiles are saved to `tip_profiles.json` in the current directory; override with `TIP_PROFILES_PATH` if needed.
 
 ## Parsing, Currency & Rounding Notes
 - Money parsing is permissive by default: accepts `$`, commas, spaces, and inputs like `.5` (=$0.50). A strict validator is available in code for canonical `$1,234.56` format.

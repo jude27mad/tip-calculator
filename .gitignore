@@ -181,3 +181,4 @@ cython_debug/
 .cursorindexingignore
 tax_cache.json
 qr_codes/
+tip_profiles.json

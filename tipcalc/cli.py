@@ -20,6 +20,7 @@ from .parsing import parse_money, parse_percentage, parse_int, parse_tax_entry
 from .tip_core import compute_tip_split
 from .qr import generate_qr_codes, QRGenerationError
 from .tax_lookup import lookup_tax_rate, TaxLookupError, TaxLookupResult
+from .profiles import get_profile, save_profile, ProfileError
 
 
 @dataclass
@@ -306,6 +307,7 @@ def run_interactive(
     tax_country: str,
     strict_money: bool,
     qr_options: Optional[dict] = None,
+    default_people: int = 1,
 ) -> None:
     print("--- Tip Calculator ---")
     tip_base_default = tip_on_pretax
@@ -372,9 +374,10 @@ def run_interactive(
         tip_on_pretax_choice = prompt_tip_base(tip_base_default)
         tip_base_default = tip_on_pretax_choice
 
+        people_prompt = f"Split between how many people? [{default_people}]: "
         people: int = prompt_loop(
-            "Split between how many people? [1]: ",
-            lambda s: 1 if not s.strip() else parse_int(s, min_value=1),
+            people_prompt,
+            lambda s: default_people if not s.strip() else parse_int(s, min_value=1),
         )
 
         results = compute_tip_split(
@@ -429,11 +432,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="ISO country code for tax lookup (default: US)",
     )
     parser.add_argument("--tip", default=None, help="Tip percentage, e.g. 20 or 20% (0-100). Default comes from config")
-    parser.add_argument("--people", type=int, default=1, help="Number of people to split between (>=1). Default: 1")
+    parser.add_argument("--people", type=int, default=None, help="Number of people to split between (>=1). Default: profile or 1")
     parser.add_argument("--post-tax", action="store_true", help="Compute tip on total (post-tax) instead of pre-tax subtotal")
-    parser.add_argument("--round-per-person", choices=["nearest", "up", "down"], default="nearest", help="Rounding mode for per-person amounts")
-    parser.add_argument("--granularity", choices=["0.01", "0.05", "0.25"], default="0.01", help="Rounding step for per-person amounts")
+    parser.add_argument("--round-per-person", choices=["nearest", "up", "down"], default=None, help="Rounding mode for per-person amounts")
+    parser.add_argument("--granularity", choices=["0.01", "0.05", "0.25"], default=None, help="Rounding step for per-person amounts")
     parser.add_argument("--config", help="Path to JSON or .env with TIP_DEFAULT_PERCENT and TIP_QUICK_PICKS")
+    parser.add_argument("--profile", help="Load saved scenario defaults by name")
+    parser.add_argument("--save-profile", help="Save current scenario defaults under a name")
     parser.add_argument("--weights", help="Comma-separated weights, e.g., 2,1,1 to split unevenly")
     parser.add_argument("--currency", choices=["USD", "EUR", "GBP", "CAD"], default="USD", help="Currency for display and symbol")
     parser.add_argument("--json", action="store_true", help="Output results as JSON")
@@ -446,20 +451,43 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+
 def run_cli(argv: Optional[List[str]] = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
 
     config = load_config(args.config)
-    round_mode = args.round_per_person
-    granularity = Decimal(args.granularity)
-    tip_on_pretax = not args.post_tax
-    currency = args.currency
-    locale = args.locale
-    fmt_mode = args.format
-    output_locale = locale if (fmt_mode == "locale" or (fmt_mode == "auto" and locale)) else None
-    strict_money = args.strict_money
     tax_country = (args.tax_country or "US").upper()
+
+    try:
+        profile_data = get_profile(args.profile) if args.profile else {}
+    except ProfileError as exc:
+        parser.error(str(exc))
+    if args.profile and not profile_data:
+        parser.error(f"Profile '{args.profile}' not found")
+
+    def _profile_value(key: str):
+        if isinstance(profile_data, dict):
+            return profile_data.get(key)
+        return None
+
+    people_pref = args.people if args.people is not None else _profile_value("people")
+    if people_pref is None:
+        people_pref = 1
+    people_pref = int(people_pref)
+
+    round_mode = args.round_per_person or _profile_value("round_mode") or "nearest"
+    granularity_raw = args.granularity or _profile_value("granularity") or "0.01"
+    if isinstance(granularity_raw, (int, float)):
+        granularity_raw = str(granularity_raw)
+    granularity = Decimal(str(granularity_raw))
+
+    currency = args.currency
+    locale_value = args.locale or _profile_value("locale")
+    fmt_mode = args.format
+    output_locale = locale_value if (fmt_mode == "locale" or (fmt_mode == "auto" and locale_value)) else None
+    strict_money = args.strict_money
+
     qr_options: Optional[dict] = None
     if args.qr:
         qr_options = {
@@ -468,6 +496,19 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
             "directory": Path(args.qr_dir),
             "scale": max(1, args.qr_scale),
         }
+
+    if args.save_profile:
+        payload = {
+            "people": people_pref,
+            "round_mode": round_mode,
+            "granularity": format(granularity, 'f'),
+        }
+        if locale_value:
+            payload["locale"] = locale_value
+        try:
+            save_profile(args.save_profile, payload)
+        except ProfileError as exc:
+            parser.error(str(exc))
 
     lookup_result: Optional[TaxLookupResult] = None
     if args.lookup_tax:
@@ -494,6 +535,8 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
         except Exception:
             parser.error("--weights must be a comma-separated list of positive numbers")
 
+    tip_on_pretax = not args.post_tax
+
     if args.interactive or args.total is None:
         try:
             run_interactive(
@@ -506,11 +549,91 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
                 tax_country=tax_country,
                 strict_money=strict_money,
                 qr_options=qr_options,
+                default_people=people_pref,
             )
             return 0
         except (KeyboardInterrupt, EOFError):
             print("\nGoodbye!")
             return 0
+
+    try:
+        total_bill = parse_money(args.total, min_value=Decimal("0.01"), strict=strict_money)
+        if lookup_result:
+            rate_fraction = lookup_result.value / Decimal("100")
+            bill_before_tax = to_cents(total_bill / (Decimal("1") + rate_fraction))
+            tax_amount = to_cents(total_bill - bill_before_tax)
+            tax_percent_display: Optional[Decimal] = lookup_result.value.quantize(Decimal("0.01"))
+        else:
+            tax_amount = parse_money(args.tax, min_value=Decimal("0.00"), strict=strict_money)
+            tax_percent_display = None
+
+        tip_input = args.tip if args.tip is not None else str(config.default_tip_percent)
+        tip_percent = parse_percentage(tip_input, min_value=Decimal("0"), max_value=Decimal("100"))
+        if tip_percent > Decimal("50"):
+            print("Warning: Tip percentage exceeds 50%.", file=sys.stderr)
+        if tax_amount >= total_bill:
+            print("Warning: Tax amount is greater than or equal to the total bill; this will be rejected.", file=sys.stderr)
+        people = len(weights) if weights is not None else parse_int(str(people_pref), min_value=1)
+        results = compute_tip_split(
+            total_bill=total_bill,
+            tax_amount=tax_amount,
+            tip_percent=tip_percent,
+            people=people,
+            tip_on_pretax=tip_on_pretax,
+            round_mode=round_mode,
+            granularity=granularity,
+            weights=weights,
+        )
+    except ValueError as e:
+        parser.error(str(e))
+        return 2
+
+    if tax_percent_display is None and results.bill_before_tax > Decimal("0"):
+        tax_percent_display = (tax_amount / results.bill_before_tax * Decimal("100")).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+
+    d = results_to_dict(
+        bill_before_tax=results.bill_before_tax,
+        tax_amount=tax_amount,
+        tax_percent=tax_percent_display,
+        original_total=total_bill,
+        tip_percent=tip_percent,
+        tip_base=("pre-tax" if tip_on_pretax else "post-tax"),
+        tip=results.tip,
+        final_total=results.final_total,
+        per_person=results.per_person,
+        currency=currency,
+        people=people,
+        weights=weights,
+    )
+    if args.json:
+        out = json.dumps(d)
+    elif args.csv:
+        header = "currency,tip_base,bill_before_tax,tax_amount,tax_percent,original_total,tip_percent,tip,final_total,people,weights,per_person"
+        out = header + "\n" + dict_to_csv_line(d)
+    else:
+        out = print_results(
+            bill_before_tax=results.bill_before_tax,
+            tax_amount=tax_amount,
+            tax_percent=tax_percent_display,
+            original_total=total_bill,
+            tip_percent=tip_percent,
+            tip_base_label=("pre-tax" if tip_on_pretax else "post-tax"),
+            tip=results.tip,
+            final_total=results.final_total,
+            per_person=results.per_person,
+            currency=currency,
+            locale=output_locale,
+        )
+    print(out)
+    if qr_options:
+        _maybe_generate_qr(results.per_person, qr_options)
+    if args.copy:
+        if not copy_to_clipboard(out):
+            print("(Could not copy to clipboard on this system)", file=sys.stderr)
+    return 0
+
 
     try:
         total_bill = parse_money(args.total, min_value=Decimal("0.01"), strict=strict_money)

@@ -1,8 +1,10 @@
 import pytest
 from datetime import datetime, timezone
 from pathlib import Path
+import types
 from decimal import Decimal, ROUND_HALF_UP
 import random
+from tipcalc import profiles
 
 import tip as tipmod
 
@@ -327,3 +329,58 @@ def test_run_cli_generates_qr(monkeypatch, tmp_path, capsys):
     assert exit_code == 0
     out = capsys.readouterr().out
     assert 'QR code' in out or 'Saved' in out
+
+
+
+def test_profiles_save_and_load(monkeypatch, tmp_path):
+    monkeypatch.setenv('TIP_PROFILES_PATH', str(tmp_path / 'profiles.json'))
+    profiles.save_profile('dinner', {
+        'people': 4,
+        'round_mode': 'nearest',
+        'granularity': '0.25',
+        'locale': 'en_US',
+    })
+    loaded = profiles.get_profile('dinner')
+    assert loaded['people'] == 4
+    assert loaded['round_mode'] == 'nearest'
+    assert loaded['granularity'] == '0.25'
+    assert loaded['locale'] == 'en_US'
+
+
+def test_run_cli_with_profile(monkeypatch, tmp_path):
+    from tipcalc import cli
+
+    monkeypatch.setenv('TIP_PROFILES_PATH', str(tmp_path / 'profiles.json'))
+    profiles.save_profile('brunch', {
+        'people': 3,
+        'round_mode': 'up',
+        'granularity': '0.25',
+        'locale': 'en_GB',
+    })
+
+    captured = {}
+
+    def fake_compute(**kwargs):
+        captured.update(kwargs)
+        return types.SimpleNamespace(
+            bill_before_tax=kwargs['total_bill'] - kwargs['tax_amount'],
+            tip=Decimal('0'),
+            final_total=kwargs['total_bill'],
+            per_person=[kwargs['total_bill']],
+        )
+
+    monkeypatch.setattr(cli, 'compute_tip_split', fake_compute)
+    monkeypatch.setattr(cli, 'print_results', lambda **kwargs: 'done')
+    monkeypatch.setattr(cli, '_save_tax_state', lambda *a, **k: None)
+
+    exit_code = cli.run_cli([
+        '--profile', 'brunch',
+        '--total', '90.00',
+        '--tax', '0',
+        '--tip', '18',
+    ])
+
+    assert exit_code == 0
+    assert captured['people'] == 3
+    assert captured['round_mode'] == 'up'
+    assert captured['granularity'] == Decimal('0.25')
