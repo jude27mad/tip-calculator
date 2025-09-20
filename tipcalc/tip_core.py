@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP
+from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from typing import List, Optional
 
-from .formats import to_cents, CENT, HUNDRED
+from .formats import CENT, HUNDRED, quantize_amount, to_cents
 
 
 @dataclass
@@ -41,9 +41,9 @@ def compute_tip_split(
     final_total = to_cents(total_bill + tip)
 
     def _round_to_step(value: Decimal, step: Decimal, mode: str) -> Decimal:
-        steps = (value / step)
+        steps = value / step
         if mode == "nearest":
-            n = steps.quantize(Decimal(0), rounding=ROUND_HALF_UP)
+            n = quantize_amount(steps, step=Decimal("1"), rounding=ROUND_HALF_UP)
         elif mode == "up":
             n = steps.to_integral_value(rounding=ROUND_CEILING)
         elif mode == "down":
@@ -106,4 +106,3 @@ def compute_tip_split(
         final_total=final_total,
         per_person=per_person,
     )
-

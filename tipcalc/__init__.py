@@ -1,17 +1,17 @@
-from .tip_core import TipResult, compute_tip_split
-from .parsing import parse_money, parse_percentage, parse_int
 from .formats import (
     CENT,
     HUNDRED,
     PERCENT_STEP,
-    to_cents,
     fmt_money,
     fmt_percent,
     print_results,
+    quantize_amount,
+    to_cents,
 )
-from .tax_lookup import lookup_tax_rate, TaxLookupError, TaxLookupResult
-
-from .qr import generate_qr_codes, QRGenerationError
+from .parsing import parse_int, parse_money, parse_percentage
+from .qr import QRGenerationError, generate_qr_codes
+from .tax_lookup import TaxLookupError, TaxLookupResult, lookup_tax_rate
+from .tip_core import TipResult, compute_tip_split
 
 __all__ = [
     "TipResult",
@@ -23,6 +23,7 @@ __all__ = [
     "HUNDRED",
     "PERCENT_STEP",
     "to_cents",
+    "quantize_amount",
     "fmt_money",
     "fmt_percent",
     "print_results",

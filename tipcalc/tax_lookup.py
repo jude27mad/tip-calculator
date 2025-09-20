@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
-import json
-import os
 from pathlib import Path
 from typing import Callable, Dict, Optional
 from urllib import error, parse, request
+
+from .formats import quantize_amount
 
 CACHE_FILENAME = "tax_cache.json"
 CACHE_TTL_HOURS = 24
@@ -146,7 +148,7 @@ def _remote_fetch(zip_code: str, country: str) -> TaxLookupResult:
         zip_code=zip_code,
         country=country,
         tax_type="percent",
-        value=rate.quantize(Decimal("0.001")),
+        value=quantize_amount(rate, step=Decimal("0.001")),
         source=source,
         fetched_at=datetime.now(timezone.utc),
     )

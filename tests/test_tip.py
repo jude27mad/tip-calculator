@@ -1,12 +1,24 @@
-import pytest
-from datetime import datetime, timezone
-from pathlib import Path
-import types
-from decimal import Decimal, ROUND_HALF_UP
 import random
+import types
+from datetime import datetime, timezone
+from decimal import ROUND_HALF_UP, Decimal
+from pathlib import Path
+from typing import Any, cast
+
+import pytest
+
 from tipcalc import profiles
 
+try:
+    from hypothesis import given
+    from hypothesis import strategies as st
+except ImportError:  # pragma: no cover - optional dependency
+    given = cast(Any, None)
+    st = cast(Any, None)
+
+
 import importlib.metadata as importlib_metadata
+
 import tip as tipmod
 
 
@@ -234,16 +246,18 @@ def test_run_cli_uses_lookup_tax(monkeypatch, capsys):
     )
     monkeypatch.setattr(cli, "load_config", lambda path=None: config)
 
-    exit_code = cli.run_cli([
-        "--total",
-        "108.00",
-        "--lookup-tax",
-        "94105",
-        "--tip",
-        "18",
-        "--people",
-        "2",
-    ])
+    exit_code = cli.run_cli(
+        [
+            "--total",
+            "108.00",
+            "--lookup-tax",
+            "94105",
+            "--tip",
+            "18",
+            "--people",
+            "2",
+        ]
+    )
 
     out = capsys.readouterr().out
     assert exit_code == 0
@@ -261,7 +275,7 @@ def test_generate_qr_codes_venmo(monkeypatch, tmp_path):
             self.payload = payload
 
         def save(self, path: str, scale: int) -> None:
-            Path(path).write_text('fake')
+            Path(path).write_text("fake")
 
     class FakeSegno:
         @staticmethod
@@ -269,17 +283,17 @@ def test_generate_qr_codes_venmo(monkeypatch, tmp_path):
             saved_payloads.append(payload)
             return FakeQR(payload)
 
-    monkeypatch.setattr(qr, '_load_segno', lambda: FakeSegno)
+    monkeypatch.setattr(qr, "_load_segno", lambda: FakeSegno)
     outputs = qr.generate_qr_codes(
-        per_person=[Decimal('12.34'), Decimal('0.66')],
-        provider='venmo',
-        note='Dinner',
+        per_person=[Decimal("12.34"), Decimal("0.66")],
+        provider="venmo",
+        note="Dinner",
         directory=tmp_path,
         scale=3,
     )
     assert len(outputs) == 2
     assert all(p.exists() for p in outputs)
-    assert saved_payloads[0].startswith('https://venmo.com/')
+    assert saved_payloads[0].startswith("https://venmo.com/")
 
 
 def test_generate_qr_codes_bad_provider(monkeypatch):
@@ -289,103 +303,118 @@ def test_generate_qr_codes_bad_provider(monkeypatch):
         @staticmethod
         def make(payload: str):
             return None
-    monkeypatch.setattr(qr, '_load_segno', lambda: DummySegno)
+
+    monkeypatch.setattr(qr, "_load_segno", lambda: DummySegno)
     with pytest.raises(qr.QRGenerationError):
-        qr.generate_qr_codes(per_person=[Decimal('1.00')], provider='unknown', note='Test', directory=Path('dummy'))
+        qr.generate_qr_codes(per_person=[Decimal("1.00")], provider="unknown", note="Test", directory=Path("dummy"))
 
 
 def test_run_cli_generates_qr(monkeypatch, tmp_path, capsys):
     from tipcalc import cli
 
     def fake_generate_qr_codes(**kwargs):
-        out_dir = kwargs['directory']
+        out_dir = kwargs["directory"]
         out_dir.mkdir(parents=True, exist_ok=True)
-        file_path = out_dir / 'qr_person_1.png'
-        file_path.write_text('fake')
+        file_path = out_dir / "qr_person_1.png"
+        file_path.write_text("fake")
         return [file_path]
 
-    monkeypatch.setattr(cli, 'generate_qr_codes', fake_generate_qr_codes)
-    monkeypatch.setattr(cli, '_save_tax_state', lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "generate_qr_codes", fake_generate_qr_codes)
+    monkeypatch.setattr(cli, "_save_tax_state", lambda *args, **kwargs: None)
 
     config = cli.AppConfig(
-        default_tip_percent=Decimal('18'),
-        quick_picks=[Decimal('20')],
+        default_tip_percent=Decimal("18"),
+        quick_picks=[Decimal("20")],
     )
-    monkeypatch.setattr(cli, 'load_config', lambda path=None: config)
+    monkeypatch.setattr(cli, "load_config", lambda path=None: config)
 
-    exit_code = cli.run_cli([
-        '--total',
-        '100.00',
-        '--tax',
-        '0',
-        '--tip',
-        '18',
-        '--people',
-        '1',
-        '--qr',
-        '--qr-dir',
-        str(tmp_path / 'codes'),
-    ])
+    exit_code = cli.run_cli(
+        [
+            "--total",
+            "100.00",
+            "--tax",
+            "0",
+            "--tip",
+            "18",
+            "--people",
+            "1",
+            "--qr",
+            "--qr-dir",
+            str(tmp_path / "codes"),
+        ]
+    )
 
     assert exit_code == 0
     out = capsys.readouterr().out
-    assert 'QR code' in out or 'Saved' in out
-
+    assert "QR code" in out or "Saved" in out
 
 
 def test_profiles_save_and_load(monkeypatch, tmp_path):
-    monkeypatch.setenv('TIP_PROFILES_PATH', str(tmp_path / 'profiles.json'))
-    profiles.save_profile('dinner', {
-        'people': 4,
-        'round_mode': 'nearest',
-        'granularity': '0.25',
-        'locale': 'en_US',
-    })
-    loaded = profiles.get_profile('dinner')
+    monkeypatch.setenv("TIP_PROFILES_PATH", str(tmp_path / "profiles.json"))
+    profiles.save_profile(
+        "dinner",
+        {
+            "people": 4,
+            "round_mode": "nearest",
+            "granularity": "0.25",
+            "locale": "en_US",
+        },
+    )
+    loaded = profiles.get_profile("dinner")
     assert loaded is not None
-    assert loaded['people'] == 4
-    assert loaded['round_mode'] == 'nearest'
-    assert loaded['granularity'] == '0.25'
-    assert loaded['locale'] == 'en_US'
+    assert loaded["people"] == 4
+    assert loaded["round_mode"] == "nearest"
+    assert loaded["granularity"] == "0.25"
+    assert loaded["locale"] == "en_US"
 
 
 def test_run_cli_with_profile(monkeypatch, tmp_path):
     from tipcalc import cli
 
-    monkeypatch.setenv('TIP_PROFILES_PATH', str(tmp_path / 'profiles.json'))
-    profiles.save_profile('brunch', {
-        'people': 3,
-        'round_mode': 'up',
-        'granularity': '0.25',
-        'locale': 'en_GB',
-    })
+    monkeypatch.setenv("TIP_PROFILES_PATH", str(tmp_path / "profiles.json"))
+    profiles.save_profile(
+        "brunch",
+        {
+            "people": 3,
+            "round_mode": "up",
+            "granularity": "0.25",
+            "locale": "en_GB",
+        },
+    )
 
     captured = {}
 
     def fake_compute(**kwargs):
         captured.update(kwargs)
         return types.SimpleNamespace(
-            bill_before_tax=kwargs['total_bill'] - kwargs['tax_amount'],
-            tip=Decimal('0'),
-            final_total=kwargs['total_bill'],
-            per_person=[kwargs['total_bill']],
+            bill_before_tax=kwargs["total_bill"] - kwargs["tax_amount"],
+            tip=Decimal("0"),
+            final_total=kwargs["total_bill"],
+            per_person=[kwargs["total_bill"]],
         )
 
-    monkeypatch.setattr(cli, 'compute_tip_split', fake_compute)
-    monkeypatch.setattr(cli, 'print_results', lambda **kwargs: 'done')
-    monkeypatch.setattr(cli, '_save_tax_state', lambda *a, **k: None)
+    monkeypatch.setattr(cli, "compute_tip_split", fake_compute)
+    monkeypatch.setattr(cli, "print_results", lambda **kwargs: "done")
+    monkeypatch.setattr(cli, "_save_tax_state", lambda *a, **k: None)
 
-    exit_code = cli.run_cli([
-        '--profile', 'brunch',
-        '--total', '90.00',
-        '--tax', '0',
-        '--tip', '18',
-    ])
+    exit_code = cli.run_cli(
+        [
+            "--profile",
+            "brunch",
+            "--total",
+            "90.00",
+            "--tax",
+            "0",
+            "--tip",
+            "18",
+        ]
+    )
 
     assert exit_code == 0
-    assert captured['people'] == 3
-    assert captured['round_mode'] == 'up'
-    assert captured['granularity'] == Decimal('0.25')
+    assert captured["people"] == 3
+    assert captured["round_mode"] == "up"
+    assert captured["granularity"] == Decimal("0.25")
+
 
 def test_tip_module_exports_and_version():
     expected_exports = {
@@ -399,6 +428,7 @@ def test_tip_module_exports_and_version():
         "CENT",
         "HUNDRED",
         "PERCENT_STEP",
+        "quantize_amount",
         "fmt_money",
         "fmt_percent",
         "print_results",
@@ -420,3 +450,62 @@ def test_tip_module_exports_and_version():
 
     assert isinstance(tipmod.__version__, str)
     assert tipmod.__version__ == expected_version
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        (Decimal("1.005"), Decimal("1.00")),
+        (Decimal("1.015"), Decimal("1.02")),
+        (Decimal("-1.005"), Decimal("-1.00")),
+        (Decimal("2.675"), Decimal("2.68")),
+    ],
+)
+def test_quantize_amount_half_even(raw: Decimal, expected: Decimal) -> None:
+    assert tipmod.quantize_amount(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "raw, rounding, expected",
+    [
+        (Decimal("1.005"), ROUND_HALF_UP, Decimal("1.01")),
+        (Decimal("2.335"), ROUND_HALF_UP, Decimal("2.34")),
+    ],
+)
+def test_quantize_amount_custom_rounding(raw: Decimal, rounding, expected: Decimal) -> None:
+    assert tipmod.quantize_amount(raw, rounding=rounding) == expected
+
+
+if given is not None and st is not None:
+
+    @st.composite
+    def _split_scenarios(draw):
+        total_cents = draw(st.integers(min_value=100, max_value=200000))
+        tax_cents = draw(st.integers(min_value=0, max_value=total_cents - 1))
+        tip_bp = draw(st.integers(min_value=0, max_value=10000))
+        people = draw(st.integers(min_value=1, max_value=8))
+        tip_on_pretax = draw(st.booleans())
+        total = Decimal(total_cents) / Decimal("100")
+        tax = Decimal(tax_cents) / Decimal("100")
+        tip_percent = Decimal(tip_bp) / Decimal("100")
+        return total, tax, tip_percent, people, tip_on_pretax
+
+    def _split_sum_invariant_property(case):
+        total_bill, tax_amount, tip_percent, people, tip_on_pretax = case
+        results = tipmod.compute_tip_split(
+            total_bill=total_bill,
+            tax_amount=tax_amount,
+            tip_percent=tip_percent,
+            people=people,
+            tip_on_pretax=tip_on_pretax,
+        )
+        total = sum(results.per_person, Decimal("0"))
+        assert total == results.final_total
+        assert all(share >= Decimal("0") for share in results.per_person)
+
+    test_split_sum_invariant_property = given(_split_scenarios())(_split_sum_invariant_property)
+else:
+
+    @pytest.mark.skip(reason="requires hypothesis")
+    def test_split_sum_invariant_property() -> None:
+        pytest.skip("requires hypothesis")

@@ -5,22 +5,24 @@ import json
 import os
 import sys
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Tuple, TypeVar
 
 from .formats import (
-    print_results,
-    results_to_dict,
-    dict_to_csv_line,
+    PERCENT_STEP,
     copy_to_clipboard,
+    dict_to_csv_line,
+    print_results,
+    quantize_amount,
+    results_to_dict,
     to_cents,
 )
-from .parsing import parse_money, parse_percentage, parse_int, parse_tax_entry
+from .parsing import parse_int, parse_money, parse_percentage, parse_tax_entry
+from .profiles import ProfileError, get_profile, save_profile
+from .qr import QRGenerationError, generate_qr_codes
+from .tax_lookup import TaxLookupError, TaxLookupResult, lookup_tax_rate
 from .tip_core import compute_tip_split
-from .qr import generate_qr_codes, QRGenerationError
-from .tax_lookup import lookup_tax_rate, TaxLookupError, TaxLookupResult
-from .profiles import get_profile, save_profile, ProfileError
 
 
 @dataclass
@@ -32,7 +34,10 @@ class AppConfig:
 
 
 def _default_config() -> AppConfig:
-    return AppConfig(default_tip_percent=Decimal("18"), quick_picks=[Decimal("15"), Decimal("18"), Decimal("20")])
+    return AppConfig(
+        default_tip_percent=Decimal("18"),
+        quick_picks=[Decimal("15"), Decimal("18"), Decimal("20")],
+    )
 
 
 def _format_decimal(value: Decimal) -> str:
@@ -41,13 +46,29 @@ def _format_decimal(value: Decimal) -> str:
         s = s.rstrip("0").rstrip(".")
     return s or "0"
 
+
 def _summarize_source(source: object, *, limit: int = 60) -> str:
     text = str(source)
     return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
-
 STATE_FILENAME = "tipstate.json"
+
+CSV_HEADER_COLUMNS = [
+    "currency",
+    "tip_base",
+    "bill_before_tax",
+    "tax_amount",
+    "tax_percent",
+    "original_total",
+    "tip_percent",
+    "tip",
+    "final_total",
+    "people",
+    "weights",
+    "per_person",
+]
+CSV_HEADER = ",".join(CSV_HEADER_COLUMNS)
 
 TAX_PRESETS: Dict[str, Tuple[str, Decimal]] = {
     "us": ("percent", Decimal("8.875")),
@@ -118,8 +139,6 @@ def _format_tax_default(tax_type: Optional[str], tax_value: Optional[Decimal]) -
     return f"${_format_decimal(cents)}"
 
 
-
-
 def _maybe_generate_qr(per_person: Iterable[Decimal], qr_options: Optional[dict]) -> None:
     if not qr_options:
         return
@@ -135,6 +154,8 @@ def _maybe_generate_qr(per_person: Iterable[Decimal], qr_options: Optional[dict]
         print(f"QR generation failed: {exc}", file=sys.stderr)
         return
     print(f"Saved {len(paths)} QR code(s) to {qr_options['directory']}")
+
+
 def _normalize_preset_key(text: str) -> str:
     return "".join(ch for ch in text.lower() if ch.isalnum())
 
@@ -177,7 +198,9 @@ def _prompt_tax_preset(
                 print(f"Lookup failed: {exc}")
                 continue
             print(
-                f"Using {_format_decimal(result.value)}% sales tax for {code.upper()} (cached via {_summarize_source(result.source)})."
+                f"Using {_format_decimal(result.value)}% sales tax for "
+                f"{code.upper()} "
+                f"(cached via {_summarize_source(result.source)})."
             )
             return result.tax_type, result.value
         if key in TAX_PRESETS:
@@ -191,7 +214,7 @@ def _parse_env_quick_picks(text: str) -> List[Decimal]:
         part = part.strip().replace("%", "")
         if not part:
             continue
-        vals.append(Decimal(part).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+        vals.append(quantize_amount(Decimal(part), step=PERCENT_STEP, rounding=ROUND_HALF_UP))
     return vals or [Decimal("15"), Decimal("18"), Decimal("20")]
 
 
@@ -268,7 +291,7 @@ def yes_no(prompt: str, *, default_yes: bool = True) -> bool:
 
 def prompt_tip_percent(config: AppConfig) -> Decimal:
     picks = [_format_decimal(p) for p in config.quick_picks]
-    menu = "  ".join(f"[{i+1}] {p}%" for i, p in enumerate(picks))
+    menu = "  ".join(f"[{i + 1}] {p}%" for i, p in enumerate(picks))
     default_str = _format_decimal(config.default_tip_percent)
     while True:
         s = input(f"Tip: {menu}  [Enter={default_str}% or custom]: ").strip().lower()
@@ -325,11 +348,7 @@ def run_interactive(
         )
         default_display = _format_tax_default(default_tax_type, default_tax_value)
         base_prompt = "Tax: enter % (e.g., 13), $ amount (e.g., 13.00), type 'lookup 94105', or 0 for none"
-        tax_prompt = (
-            f"{base_prompt} [Enter={default_display}]: "
-            if default_display
-            else f"{base_prompt}: "
-        )
+        tax_prompt = f"{base_prompt} [Enter={default_display}]: " if default_display else f"{base_prompt}: "
 
         def _parse_tax(user_input: str) -> Tuple[str, Decimal]:
             text = user_input.strip()
@@ -348,7 +367,9 @@ def run_interactive(
                 except TaxLookupError as exc:
                     raise ValueError(f"Lookup failed: {exc}")
                 print(
-                    f"Using {_format_decimal(result.value)}% sales tax for {code.upper()} (cached via {_summarize_source(result.source)})."
+                    f"Using {_format_decimal(result.value)}% sales tax for "
+                    f"{code.upper()} "
+                    f"(cached via {_summarize_source(result.source)})."
                 )
                 return result.tax_type, result.value
             tax_type, tax_val = parse_tax_entry(text, strict=strict_money)
@@ -412,14 +433,26 @@ def run_interactive(
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Tip Calculator with exact split and Decimal precision. Default: tip on pre-tax subtotal (use --post-tax to tip on total)."
+        description=(
+            "Tip Calculator with exact split and Decimal precision. "
+            "Default: tip on pre-tax subtotal (use --post-tax to tip on total)."
+        )
     )
     parser.add_argument("--total", help="Total bill amount (including tax), e.g. 123.45 or $123.45")
     parser.add_argument("--tax", default="0", help="Tax amount, e.g. 10.23. Default: 0")
     parser.add_argument("--qr", action="store_true", help="Generate per-person payment QR codes")
-    parser.add_argument("--qr-provider", choices=["venmo", "generic"], default="venmo", help="QR link provider to use")
+    parser.add_argument(
+        "--qr-provider",
+        choices=["venmo", "generic"],
+        default="venmo",
+        help="QR link provider to use",
+    )
     parser.add_argument("--qr-dir", default="qr_codes", help="Directory to write QR code PNG files")
-    parser.add_argument("--qr-note", default="tipcalc split", help="Note text embedded in the QR payload")
+    parser.add_argument(
+        "--qr-note",
+        default="tipcalc split",
+        help="Note text embedded in the QR payload",
+    )
     parser.add_argument("--qr-scale", type=int, default=5, help="Pixel scale for generated QR images")
     parser.add_argument(
         "--lookup-tax",
@@ -431,25 +464,71 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="US",
         help="ISO country code for tax lookup (default: US)",
     )
-    parser.add_argument("--tip", default=None, help="Tip percentage, e.g. 20 or 20% (0-100). Default comes from config")
-    parser.add_argument("--people", type=int, default=None, help="Number of people to split between (>=1). Default: profile or 1")
-    parser.add_argument("--post-tax", action="store_true", help="Compute tip on total (post-tax) instead of pre-tax subtotal")
-    parser.add_argument("--round-per-person", choices=["nearest", "up", "down"], default=None, help="Rounding mode for per-person amounts")
-    parser.add_argument("--granularity", choices=["0.01", "0.05", "0.25"], default=None, help="Rounding step for per-person amounts")
-    parser.add_argument("--config", help="Path to JSON or .env with TIP_DEFAULT_PERCENT and TIP_QUICK_PICKS")
+    parser.add_argument(
+        "--tip",
+        default=None,
+        help="Tip percentage, e.g. 20 or 20% (0-100). Default comes from config",
+    )
+    parser.add_argument(
+        "--people",
+        type=int,
+        default=None,
+        help="Number of people to split between (>=1). Default: profile or 1",
+    )
+    parser.add_argument(
+        "--post-tax",
+        action="store_true",
+        help="Compute tip on total (post-tax) instead of pre-tax subtotal",
+    )
+    parser.add_argument(
+        "--round-per-person",
+        choices=["nearest", "up", "down"],
+        default=None,
+        help="Rounding mode for per-person amounts",
+    )
+    parser.add_argument(
+        "--granularity",
+        choices=["0.01", "0.05", "0.25"],
+        default=None,
+        help="Rounding step for per-person amounts",
+    )
+    parser.add_argument(
+        "--config",
+        help="Path to JSON or .env with TIP_DEFAULT_PERCENT and TIP_QUICK_PICKS",
+    )
     parser.add_argument("--profile", help="Load saved scenario defaults by name")
     parser.add_argument("--save-profile", help="Save current scenario defaults under a name")
     parser.add_argument("--weights", help="Comma-separated weights, e.g., 2,1,1 to split unevenly")
-    parser.add_argument("--currency", choices=["USD", "EUR", "GBP", "CAD"], default="USD", help="Currency for display and symbol")
+    parser.add_argument(
+        "--currency",
+        choices=["USD", "EUR", "GBP", "CAD"],
+        default="USD",
+        help="Currency for display and symbol",
+    )
     parser.add_argument("--json", action="store_true", help="Output results as JSON")
     parser.add_argument("--csv", action="store_true", help="Output results as CSV")
     parser.add_argument("--copy", action="store_true", help="Copy the output to clipboard")
-    parser.add_argument("--locale", help="Locale for formatting (e.g., en_US). Requires Babel if provided.")
-    parser.add_argument("--format", choices=["auto", "simple", "locale"], default="auto", help="Output formatting style: simple (fallback) or locale-aware (requires --locale)")
-    parser.add_argument("--strict-money", action="store_true", help="Validate canonical money format ($1,234.56); reject loose inputs")
-    parser.add_argument("--interactive", action="store_true", help="Force interactive mode regardless of provided flags.")
+    parser.add_argument(
+        "--locale",
+        help="Locale for formatting (e.g., en_US). Requires Babel if provided.",
+    )
+    parser.add_argument(
+        "--format",
+        choices=["auto", "simple", "locale"],
+        default="auto",
+        help="Output formatting style: simple (fallback) or locale-aware (requires --locale)",
+    )
+    parser.add_argument(
+        "--strict-money",
+        action="store_true",
+        help="Validate canonical money format ($1,234.56); reject loose inputs",
+    )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Force interactive mode regardless of provided flags.",
+    )
     return parser
-
 
 
 def run_cli(argv: Optional[List[str]] = None) -> int:
@@ -501,7 +580,7 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
         payload = {
             "people": people_pref,
             "round_mode": round_mode,
-            "granularity": format(granularity, 'f'),
+            "granularity": format(granularity, "f"),
         }
         if locale_value:
             payload["locale"] = locale_value
@@ -520,7 +599,9 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
         config.last_tax_value = lookup_result.value
         _save_tax_state("percent", lookup_result.value)
         print(
-            f"Using {_format_decimal(lookup_result.value)}% sales tax for {args.lookup_tax.upper()} (cached via {_summarize_source(lookup_result.source)})."
+            f"Using {_format_decimal(lookup_result.value)}% sales tax for "
+            f"{args.lookup_tax.upper()} "
+            f"(cached via {_summarize_source(lookup_result.source)})."
         )
 
     if lookup_result and not (args.interactive or args.total):
@@ -562,7 +643,7 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
             rate_fraction = lookup_result.value / Decimal("100")
             bill_before_tax = to_cents(total_bill / (Decimal("1") + rate_fraction))
             tax_amount = to_cents(total_bill - bill_before_tax)
-            tax_percent_display: Optional[Decimal] = lookup_result.value.quantize(Decimal("0.01"))
+            tax_percent_display: Optional[Decimal] = quantize_amount(lookup_result.value, step=PERCENT_STEP)
         else:
             tax_amount = parse_money(args.tax, min_value=Decimal("0.00"), strict=strict_money)
             tax_percent_display = None
@@ -572,7 +653,10 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
         if tip_percent > Decimal("50"):
             print("Warning: Tip percentage exceeds 50%.", file=sys.stderr)
         if tax_amount >= total_bill:
-            print("Warning: Tax amount is greater than or equal to the total bill; this will be rejected.", file=sys.stderr)
+            print(
+                "Warning: Tax amount is greater than or equal to the total bill; this will be rejected.",
+                file=sys.stderr,
+            )
         people = len(weights) if weights is not None else parse_int(str(people_pref), min_value=1)
         results = compute_tip_split(
             total_bill=total_bill,
@@ -589,8 +673,10 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
         return 2
 
     if tax_percent_display is None and results.bill_before_tax > Decimal("0"):
-        tax_percent_display = (tax_amount / results.bill_before_tax * Decimal("100")).quantize(
-            Decimal("0.01"), rounding=ROUND_HALF_UP
+        tax_percent_display = quantize_amount(
+            tax_amount / results.bill_before_tax * Decimal("100"),
+            step=PERCENT_STEP,
+            rounding=ROUND_HALF_UP,
         )
 
     d = results_to_dict(
@@ -610,8 +696,7 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
     if args.json:
         out = json.dumps(d)
     elif args.csv:
-        header = "currency,tip_base,bill_before_tax,tax_amount,tax_percent,original_total,tip_percent,tip,final_total,people,weights,per_person"
-        out = header + "\n" + dict_to_csv_line(d)
+        out = CSV_HEADER + "\n" + dict_to_csv_line(d)
     else:
         out = print_results(
             bill_before_tax=results.bill_before_tax,
@@ -634,14 +719,13 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
             print("(Could not copy to clipboard on this system)", file=sys.stderr)
     return 0
 
-
     try:
         total_bill = parse_money(args.total, min_value=Decimal("0.01"), strict=strict_money)
         if lookup_result:
             rate_fraction = lookup_result.value / Decimal("100")
             bill_before_tax = to_cents(total_bill / (Decimal("1") + rate_fraction))
             tax_amount = to_cents(total_bill - bill_before_tax)
-            tax_percent_display: Optional[Decimal] = lookup_result.value.quantize(Decimal("0.01"))
+            tax_percent_display: Optional[Decimal] = quantize_amount(lookup_result.value, step=PERCENT_STEP)
         else:
             tax_amount = parse_money(args.tax, min_value=Decimal("0.00"), strict=strict_money)
             tax_percent_display = None
@@ -651,7 +735,10 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
         if tip_percent > Decimal("50"):
             print("Warning: Tip percentage exceeds 50%.", file=sys.stderr)
         if tax_amount >= total_bill:
-            print("Warning: Tax amount is greater than or equal to the total bill; this will be rejected.", file=sys.stderr)
+            print(
+                "Warning: Tax amount is greater than or equal to the total bill; this will be rejected.",
+                file=sys.stderr,
+            )
         people = len(weights) if weights is not None else parse_int(str(args.people), min_value=1)
         results = compute_tip_split(
             total_bill=total_bill,
@@ -668,8 +755,10 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
         return 2
 
     if tax_percent_display is None and results.bill_before_tax > Decimal("0"):
-        tax_percent_display = (tax_amount / results.bill_before_tax * Decimal("100")).quantize(
-            Decimal("0.01"), rounding=ROUND_HALF_UP
+        tax_percent_display = quantize_amount(
+            tax_amount / results.bill_before_tax * Decimal("100"),
+            step=PERCENT_STEP,
+            rounding=ROUND_HALF_UP,
         )
 
     d = results_to_dict(
@@ -689,8 +778,7 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
     if args.json:
         out = json.dumps(d)
     elif args.csv:
-        header = "currency,tip_base,bill_before_tax,tax_amount,tax_percent,original_total,tip_percent,tip,final_total,people,weights,per_person"
-        out = header + "\n" + dict_to_csv_line(d)
+        out = CSV_HEADER + "\n" + dict_to_csv_line(d)
     else:
         out = print_results(
             bill_before_tax=results.bill_before_tax,

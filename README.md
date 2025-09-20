@@ -165,6 +165,19 @@ Pass a custom path with `--config path/to/tipconfig.json`.
 
 - Calculations are performed in two decimal places (cents). This matches USD,
   EUR, GBP, and CAD.
+### Cash Rounding (Canada)
+
+Cash payments in Canada round **only the final total after tax and tip** to the nearest five cents.
+Per-person amounts stay at cent precision for convenience;
+nickel rounding happens once on the grand total.
+
+| Payment method | Rounding rule | Example |
+| --- | --- | --- |
+| Cash (CA) | Round final total to the nearest $0.05 | $67.32 -> $67.30, $67.33 -> $67.35 |
+| Card / digital | No additional rounding | $67.33 stays $67.33 |
+
+When you settle in cash, apply the nickel rounding once to the grand total rather than to each line item or per-person share.
+
 - If you use `--locale` and have Babel installed, printed amounts use
   locale-aware formatting for separators and symbol placement. The numeric
   precision remains two decimals. Currencies with non-two-decimal minor units
@@ -201,3 +214,5 @@ Pass a custom path with `--config path/to/tipconfig.json`.
 ## Testing
 
 - Run all tests: `pytest -q`
+
+

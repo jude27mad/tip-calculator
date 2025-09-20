@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import re
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Optional, Tuple
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from typing import Tuple
 
-from .formats import to_cents, PERCENT_STEP
+from .formats import PERCENT_STEP, quantize_amount, to_cents
 
 
 def parse_money(
@@ -42,7 +42,7 @@ def parse_percentage(
         raise ValueError("Enter a valid percentage (e.g., 18 or 18%)") from exc
     if value < min_value or value > max_value:
         raise ValueError(f"Percentage must be between {min_value} and {max_value}")
-    return value.quantize(PERCENT_STEP, rounding=ROUND_HALF_UP)
+    return quantize_amount(value, step=PERCENT_STEP, rounding=ROUND_HALF_UP)
 
 
 def parse_int(text: str, *, min_value: int = 1) -> int:
@@ -53,7 +53,6 @@ def parse_int(text: str, *, min_value: int = 1) -> int:
     if value < min_value:
         raise ValueError(f"Value must be >= {min_value}")
     return value
-
 
 
 def parse_tax_entry(
