@@ -18,14 +18,14 @@ By default, tip is calculated on the pre-tax subtotal (switchable with
 - Interactive: `tip --interactive` (or `python tip.py --interactive`)
   - Quick tax presets: US 8.875%, CA-ON 13%, CA-BC 12%, EU-VAT 20% (remembers
     the last choice)
-  - Live lookup: type `lookup 94105` (or any ZIP/postal code) to fetch and
-    cache the local sales tax
+  - Live lookup: type `lookup M3C1B9` / `lookup 94105` to fetch and
+    cache the local sales tax (Canadian postal codes and US ZIP codes resolve offline; US values use state base rates, so other regions still need an API key)
   - Options work in interactive too: `--post-tax`, `--round-per-person
     up|down|nearest`, `--granularity 0.01|0.05|0.25`, `--currency
     USD|EUR|GBP|CAD`
 - One-shot CLI: `tip --total 123.45 --tax 10.23 --people 3`
   - Auto tax lookup: `tip --total 108.00 --lookup-tax 94105 --tip 18 --people 2`
-    (requires lookup API credentials)
+    (Canadian postal codes and US ZIP codes work offline; US data uses state base rates, so other regions require API credentials)
   - Generate QR codes: `tip --total 108.00 --tip 18 --people 2 --qr --qr-note
     "Dinner"`
   - Manage profiles: `tip --profile dinner --total 80 --tip 20`
@@ -58,8 +58,9 @@ python -c "import tip; print(tip.__version__)"
 - `--qr-dir`: Directory path to store generated QR images.
 - `--qr-note`: Note text embedded in the payment link.
 - `--qr-scale`: Pixel scale for QR modules (default `5`).
-- `--lookup-tax`: Fetch sales tax percent by ZIP or postal code (hits the
-  configured API and caches for 24 hours).
+- `--lookup-tax`: Fetch sales tax percent by ZIP or postal code. Canadian
+  postal codes resolve offline; other regions hit the configured API and cache
+  for 24 hours.
 - `--tax-country`: ISO country code for lookups (default `US`).
 - `--tip`: Tip percent (0-100, fractional values allowed). If omitted, the
   default comes from config (18% unless overridden).
@@ -124,7 +125,9 @@ one-key selection.
 
 - Use `--lookup-tax ZIP` for batch commands or type `lookup 94105` during
   interactive prompts to fetch the current combined rate.
-- The default provider is the
+- Canadian postal codes are handled offline with built-in province and
+  territory rates (GST + PST/HST/QST), so no API key is required.
+- For other regions, the default provider is the
   [api-ninjas sales tax API](https://api.api-ninjas.com/v1/salestax). Export
   `TIP_TAX_API_KEY` (and optionally `TIP_TAX_API_BASE`) before running.
 - Lookup results are cached for 24 hours in `tax_cache.json`. Override with
@@ -165,6 +168,7 @@ Pass a custom path with `--config path/to/tipconfig.json`.
 
 - Calculations are performed in two decimal places (cents). This matches USD,
   EUR, GBP, and CAD.
+
 ### Cash Rounding (Canada)
 
 Cash payments in Canada round **only the final total after tax and tip** to the nearest five cents.
@@ -214,5 +218,3 @@ When you settle in cash, apply the nickel rounding once to the grand total rathe
 ## Testing
 
 - Run all tests: `pytest -q`
-
-

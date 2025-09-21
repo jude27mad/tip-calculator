@@ -1,6 +1,13 @@
 {
   "$schema": "https://raw.githubusercontent.com/microsoft/pyright/main/packages/pyright/schema/pyrightconfig.schema.json",
-  "include": ["**/*.py"],
-  "extraPaths": ["./", "./tipcalc"],
+  "include": [
+    "tipcalc",
+    "tests",
+    "tip.py"
+  ],
+  "extraPaths": [
+    "./",
+    "./tipcalc"
+  ],
   "typeCheckingMode": "basic"
 }

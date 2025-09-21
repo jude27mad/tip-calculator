@@ -163,9 +163,37 @@ def test_rounding_preferences_quarters_up_down_nearest():
             assert (mult * step).quantize(Decimal("0.01")) == amt
 
 
+def test_lookup_tax_rate_us_state_base():
+    def fail_fetch(zip_code: str, country: str):
+        raise AssertionError("remote fetch should not be used for US base data")
+
+    result = tipmod.lookup_tax_rate("10001", country="US", fetcher=fail_fetch)
+    assert result.value == Decimal("4")
+    assert result.source == "local:US-NY-state-base"
+
+
+def test_lookup_tax_rate_us_zero_tax():
+    result = tipmod.lookup_tax_rate("19709", country="US")
+    assert result.value == Decimal("0")
+    assert result.source == "local:US-DE-state-base"
+
+
+def test_lookup_tax_rate_local_dataset():
+    def fail_fetch(zip_code: str, country: str):
+        raise AssertionError("remote fetch should not be used for local data")
+
+    result = tipmod.lookup_tax_rate("M3C 1B9", country="CA", fetcher=fail_fetch)
+    assert result.value == Decimal("13")
+    assert result.source.startswith("local:CA-ON")
+
+
 def test_lookup_tax_rate_caches(monkeypatch, tmp_path):
     cache_file = tmp_path / "cache.json"
     monkeypatch.setenv("TIP_TAX_CACHE_PATH", str(cache_file))
+    from tipcalc import tax_lookup as tax_lookup_module
+
+    monkeypatch.setattr(tax_lookup_module, "lookup_local_tax", lambda *args, **kwargs: None)
+
     calls = []
 
     def fake_fetch(zip_code: str, country: str):
@@ -189,6 +217,10 @@ def test_lookup_tax_rate_caches(monkeypatch, tmp_path):
 def test_lookup_tax_rate_expired_cache(monkeypatch, tmp_path):
     cache_file = tmp_path / "cache.json"
     monkeypatch.setenv("TIP_TAX_CACHE_PATH", str(cache_file))
+    from tipcalc import tax_lookup as tax_lookup_module
+
+    monkeypatch.setattr(tax_lookup_module, "lookup_local_tax", lambda *args, **kwargs: None)
+
     calls = []
 
     def fake_fetch(zip_code: str, country: str):

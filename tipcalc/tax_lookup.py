@@ -10,6 +10,7 @@ from typing import Callable, Dict, Optional
 from urllib import error, parse, request
 
 from .formats import quantize_amount
+from .tax_data import lookup_local_tax
 
 CACHE_FILENAME = "tax_cache.json"
 CACHE_TTL_HOURS = 24
@@ -41,6 +42,22 @@ class TaxLookupResult:
 
 
 FetchFunc = Callable[[str, str], TaxLookupResult]
+
+
+def _local_lookup(zip_code: str, country: str) -> Optional[TaxLookupResult]:
+    match = lookup_local_tax(zip_code, country)
+    if not match:
+        return None
+
+    tax_type, rate, source = match
+    return TaxLookupResult(
+        zip_code=zip_code,
+        country=country,
+        tax_type=tax_type,
+        value=rate,
+        source=source,
+        fetched_at=datetime.now(timezone.utc),
+    )
 
 
 def _cache_path() -> Path:
@@ -162,11 +179,17 @@ def lookup_tax_rate(
     ttl_hours: int = CACHE_TTL_HOURS,
     use_cache: bool = True,
 ) -> TaxLookupResult:
-    cleaned_zip = zip_code.strip().replace(" ", "")
+    cleaned_zip = zip_code.strip().replace(" ", "").upper()
     if not cleaned_zip:
         raise TaxLookupError("ZIP/postal code is required")
 
-    key = _cache_key(cleaned_zip, country)
+    normalized_country = country.upper()
+
+    local_result = _local_lookup(cleaned_zip, normalized_country)
+    if local_result:
+        return local_result
+
+    key = _cache_key(cleaned_zip, normalized_country)
     cache: Dict[str, Dict[str, str]] = _load_cache() if use_cache else {}
 
     if use_cache and key in cache:
@@ -175,7 +198,7 @@ def lookup_tax_rate(
             return cached
 
     fetch_impl = fetcher or _remote_fetch
-    result = fetch_impl(cleaned_zip, country.upper())
+    result = fetch_impl(cleaned_zip, normalized_country)
 
     if use_cache:
         cache[key] = result.cache_payload()
