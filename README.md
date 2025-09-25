@@ -18,7 +18,7 @@ By default, tip is calculated on the pre-tax subtotal (switchable with
 - Interactive: `tip --interactive` (or `python tip.py --interactive`)
   - Quick tax presets: US 8.875%, CA-ON 13%, CA-BC 12%, EU-VAT 20% (remembers
     the last choice)
-  - Live lookup: type `lookup M3C1B9` / `lookup 94105` to fetch and
+  - Live lookup: type `lookup A0A0A0` / `lookup 99999` to fetch and
     cache the local sales tax (Canadian postal codes and US ZIP codes resolve offline; US values use state base rates, so other regions still need an API key)
   - Options work in interactive too: `--post-tax`, `--round-per-person
     up|down|nearest`, `--granularity 0.01|0.05|0.25`, `--currency
@@ -123,7 +123,7 @@ one-key selection.
 
 ### Live Tax Lookup
 
-- Use `--lookup-tax ZIP` for batch commands or type `lookup 94105` during
+- Use `--lookup-tax ZIP` for batch commands or type `lookup 99999` during
   interactive prompts to fetch the current combined rate.
 - Canadian postal codes are handled offline with built-in province and
   territory rates (GST + PST/HST/QST), so no API key is required.
