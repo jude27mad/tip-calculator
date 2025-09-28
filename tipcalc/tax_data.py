@@ -1138,9 +1138,9 @@ def lookup_local_tax(zip_code: str, country: str) -> Optional[Tuple[str, Decimal
             prefix = digits[:3]
             state = _US_PREFIX_TO_STATE.get(prefix)
             if state:
-                rate = _US_STATE_BASE_RATES.get(state)
-                if rate is not None:
+                state_rate = _US_STATE_BASE_RATES.get(state)
+                if state_rate is not None:
                     source = f"local:US-{state}-state-base"
-                    return "percent", rate, source
+                    return "percent", state_rate, source
 
     return None
